@@ -46,6 +46,8 @@ type Option struct {
 	Period time.Duration
 	// RebalancePeriod is the interval between every rebalance loop
 	RebalancePeriod time.Duration
+	// RebalanceHealthRateWatermark is the watermark to determine whether to run rebalance
+	RebalanceHealthRateWatermark float64
 }
 
 // Coordinator periodically re balance all replicates
@@ -59,6 +61,7 @@ type Coordinator struct {
 	getActive        func() map[uint64]*discovery.SDTargets
 
 	lastGlobalScrapeStatus map[uint64]*target.ScrapeStatus
+	lastRebalanceTime      time.Time
 }
 
 // NewCoordinator create a new coordinator service
@@ -73,13 +76,14 @@ func NewCoordinator(
 	ch := make(chan int, 1)
 	ch <- 1
 	return &Coordinator{
-		reManager:        reManager,
-		getConfig:        getConfig,
-		getExploreResult: getExploreResult,
-		getActive:        getActive,
-		option:           option,
-		log:              log,
-		concurrencyLock:  ch,
+		reManager:              reManager,
+		getConfig:              getConfig,
+		getExploreResult:       getExploreResult,
+		getActive:              getActive,
+		option:                 option,
+		log:                    log,
+		concurrencyLock:        ch,
+		lastGlobalScrapeStatus: make(map[uint64]*target.ScrapeStatus),
 	}
 }
 
@@ -181,7 +185,7 @@ func (c *Coordinator) runRebalanceOnce() error {
 	if err != nil {
 		return errors.Wrapf(err, "get replicas")
 	}
-
+	rebalanced := false
 	for _, repItem := range replicas {
 		shards, err := repItem.Shards()
 		if err != nil {
@@ -198,9 +202,9 @@ func (c *Coordinator) runRebalanceOnce() error {
 		c.lastGlobalScrapeStatus = c.globalScrapeStatus(active, shardsInfo)
 		// if there many target is unhealthy, skip rebalance
 		healthRate := getScrapeHealthRate(c.lastGlobalScrapeStatus)
-		minHealthRate := 0.95
-		if healthRate < minHealthRate {
-			c.log.Warnf("scrape status health rate is smaller than %f, cancel to rebalance.", minHealthRate)
+		//minHealthRate := c.option.RebalanceHealthRateWatermark
+		if healthRate < c.option.RebalanceHealthRateWatermark {
+			c.log.Warnf("scrape status health rate is smaller than %f, cancel to rebalance.", c.option.RebalanceHealthRateWatermark)
 			return nil
 		}
 
@@ -227,21 +231,30 @@ func (c *Coordinator) runRebalanceOnce() error {
 				continue
 			}
 
-			bestVector := c.tryRebalanceForOneGroup(group, targets, shardsState, shardsMap)
-			for h, v := range bestVector {
-				transferTarget(v.from, v.to, h)
+			if bestVector, ok := c.tryRebalanceForOneGroup(group, targets, shardsState, shardsMap); ok {
+				for h, v := range bestVector {
+					transferTarget(v.from, v.to, h)
+				}
+				rebalanced = true
 			}
+
 		}
 		shardsGroupedSeries, shardsGroupedScraping, _, shardSeries, shardsMap, totalSeries := getGroupedScrapingInfo(shardsInfo, c.lastGlobalScrapeStatus, groupedTargets)
 
-		vectors := c.tryRebalanceBetweenGroups(shardsMap, groupedTargets, shardSeries, shardsGroupedSeries, shardsGroupedScraping, totalSeries)
-		for h, v := range vectors {
-			transferTarget(v.from, v.to, h)
+		if vectors, ok := c.tryRebalanceBetweenGroups(shardsMap, groupedTargets, shardSeries, shardsGroupedSeries, shardsGroupedScraping, totalSeries); ok {
+			for h, v := range vectors {
+				transferTarget(v.from, v.to, h)
+			}
+			rebalanced = true
 		}
 
 		updateScrapingTargets(shardsInfo, active)
 		c.applyShardsInfo(shardsInfo)
 
+	}
+
+	if rebalanced {
+		c.lastRebalanceTime = time.Now()
 	}
 
 	return nil
@@ -254,7 +267,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 	targets map[uint64]*discovery.SDTargets,
 	shardsState map[string]*simpleShardState,
 	shardsMap map[string]*shardInfo,
-) map[uint64]*vector {
+) (map[uint64]*vector, bool) {
 
 	shardSeries, avg, currSD := getShardStandardDeviation(shardsState, targets, c.lastGlobalScrapeStatus)
 	bestSD := float64(c.option.MaxSeries)
@@ -267,12 +280,15 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 
 	if !math.IsNaN(currSD) {
 		bestSD = currSD
-		if avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/4) {
-			if currSD < (avg / 4) {
+		if (avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/6)) && time.Now().Before(c.lastRebalanceTime.Add(time.Hour*24)) {
+			if currSD < (avg / 6) {
 				c.log.Debugf("Group: %s, Avg: %f, SD: %f, balance enough, no need to rebalance", groupName, avg, currSD)
-				return nil
+				return nil, false
 			}
 		}
+	} else {
+		c.log.Debugf("rebalance: standard deviation is NaN, cancel to rebalance")
+		return nil, false
 	}
 
 	loop := 0
@@ -293,8 +309,13 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 		}
 
 		diff := int64(math.Abs(avg - float64(shardSeries[minShard])))
-		t := getClosestTarget(shardsState[maxShard], diff, targets)
-		c.log.Debugf("closest target: %d, series: %d", t, c.lastGlobalScrapeStatus[t].Series)
+		t, ok := getClosestTarget(shardsState[maxShard], diff, targets)
+		if !ok {
+			continue
+		}
+		if c.lastGlobalScrapeStatus != nil && c.lastGlobalScrapeStatus[t] != nil {
+			c.log.Debugf("closest target: %d, series: %d", t, c.lastGlobalScrapeStatus[t].Series)
+		}
 		if shardSeries[minShard]+c.lastGlobalScrapeStatus[t].Series <= c.option.MaxSeries {
 			// move target from maxShard to minShard
 			shardsState[minShard].headSeries = shardsState[minShard].headSeries + c.lastGlobalScrapeStatus[t].Series
@@ -336,7 +357,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 		c.log.Debugf("Shard %s has %d series", n, s)
 	}
 
-	return bestVector
+	return bestVector, true
 }
 
 func (c *Coordinator) tryRebalanceBetweenGroups(
@@ -346,13 +367,13 @@ func (c *Coordinator) tryRebalanceBetweenGroups(
 	shardsGroupedSeries map[string]map[string]int64,
 	shardsGroupedScraping map[string]map[string]map[uint64]int64,
 	totalSeries int64,
-) map[uint64]*vector {
+) (map[uint64]*vector, bool) {
 	targetVector := make(map[uint64]*vector)
 	min, max := getMinMaxSeries(shardSeries)
 	avg := totalSeries / int64(len(shardsMap))
-	if shardSeries[max]-shardSeries[min] < avg/4 {
+	if shardSeries[max]-shardSeries[min] < avg/6 && time.Now().Before(c.lastRebalanceTime.Add(time.Hour*24)) {
 		c.log.Infof("balance enough between shards, skip")
-		return targetVector
+		return targetVector, false
 	}
 
 	for i := 0; i <= 10; i++ {
@@ -392,11 +413,10 @@ func (c *Coordinator) tryRebalanceBetweenGroups(
 
 				shardsGroupedSeries[min][group] = shardsGroupedSeries[max][group]
 				shardsGroupedSeries[max][group] = 0
-
 			}
 
 		}
 	}
-	return targetVector
+	return targetVector, true
 
 }

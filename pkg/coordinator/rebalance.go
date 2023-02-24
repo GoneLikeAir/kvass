@@ -18,8 +18,8 @@
 package coordinator
 
 import (
-	wr "github.com/mroth/weightedrand"
 	"github.com/grd/statistics"
+	wr "github.com/mroth/weightedrand"
 	"github.com/prometheus/prometheus/scrape"
 	"golang.org/x/sync/errgroup"
 	"math"
@@ -532,15 +532,15 @@ func mergeScrapeStatus(a, b map[uint64]*target.ScrapeStatus) map[uint64]*target.
 type simpleShardState struct {
 	scraping   map[uint64]int64
 	headSeries int64
-	id string
+	id         string
 }
 
 type vector struct {
 	from *shardInfo
-	to *shardInfo
+	to   *shardInfo
 }
 
-func getMinMaxSeries(shardSeries map[string]int64) (minShard, maxShard string){
+func getMinMaxSeries(shardSeries map[string]int64) (minShard, maxShard string) {
 	minSeries := int64(999999999)
 	maxSeries := int64(0)
 	for sd, series := range shardSeries {
@@ -556,26 +556,28 @@ func getMinMaxSeries(shardSeries map[string]int64) (minShard, maxShard string){
 	return
 }
 
-func getClosestTarget(shardState *simpleShardState, diff int64, targets map[uint64]*discovery.SDTargets) uint64 {
+func getClosestTarget(shardState *simpleShardState, diff int64, targets map[uint64]*discovery.SDTargets) (uint64, bool) {
 	result := uint64(0)
 	minDiff := float64(0)
 	minSeries := int64(9999999999)
+	valid := false
 	for hash, series := range shardState.scraping {
 		tmp := math.Abs(float64(series) - float64(diff))
 		if _, ok := targets[hash]; ok && (result == 0 || tmp <= minDiff) {
 			if series < minSeries {
 				minDiff = tmp
 				result = hash
+				valid = true
 			}
 		}
 	}
-	return result
+	return result, valid
 }
 
-func getGroupedTargets(active map[uint64]*discovery.SDTargets) map[string]map[uint64]*discovery.SDTargets{
+func getGroupedTargets(active map[uint64]*discovery.SDTargets) map[string]map[uint64]*discovery.SDTargets {
 	groupedTargets := make(map[string]map[uint64]*discovery.SDTargets)
 	for h, t := range active {
-		if _, ok := groupedTargets[t.Job] ; !ok {
+		if _, ok := groupedTargets[t.Job]; !ok {
 			jobTargets := make(map[uint64]*discovery.SDTargets)
 			groupedTargets[t.Job] = jobTargets
 		}
@@ -591,7 +593,7 @@ func getScrapeHealthRate(globalScrapeStatus map[uint64]*target.ScrapeStatus) flo
 			healthNum++
 		}
 	}
-	return float64(healthNum)/float64(len(globalScrapeStatus))
+	return float64(healthNum) / float64(len(globalScrapeStatus))
 }
 
 func getGroupedScrapingInfo(
@@ -611,14 +613,14 @@ func getGroupedScrapingInfo(
 	shardsState = make(map[string]*simpleShardState)
 	shardsGroupedSeries = make(map[string]map[string]int64)
 	shardsGroupedScraping = make(map[string]map[string]map[uint64]int64)
-	shardsMap  = make(map[string]*shardInfo)
+	shardsMap = make(map[string]*shardInfo)
 	shardSeries = make(map[string]int64)
 
 	for _, sd := range shards {
 		headSeries := int64(0)
 		ss := &simpleShardState{
 			scraping: map[uint64]int64{},
-			id: sd.shard.ID,
+			id:       sd.shard.ID,
 		}
 		ss.id = sd.shard.ID
 
@@ -694,7 +696,7 @@ func getShardStandardDeviation(
 	}
 
 	if total == 0 {
-		return shardSeries, 0 ,0
+		return shardSeries, 0, 0
 	}
 
 	avg = float64(total) / float64(len(shardSeries))
