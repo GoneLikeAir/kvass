@@ -67,6 +67,7 @@ var cdCfg = struct {
 	rebalanceEnable              bool
 	rebalanceInterval            time.Duration
 	rebalanceHealthRateWatermark float64
+	forceRebalanceInterval       time.Duration
 }{}
 
 type LocalFormatter struct {
@@ -124,6 +125,8 @@ func init() {
 		"the interval of coordinator rebalance loop")
 	coordinatorCmd.Flags().Float64Var(&cdCfg.rebalanceHealthRateWatermark, "coordinator.rebalance-health-rate-watermark", 0.5,
 		"the watermark of healthRate, only run rebalance when healthRate of targets is greater than watermark")
+	coordinatorCmd.Flags().DurationVar(&cdCfg.forceRebalanceInterval, "coordinator.force-rebalance-interval", time.Hour*24,
+		"the interval of coordinator force to run rebalance, default 1 day")
 	rootCmd.AddCommand(coordinatorCmd)
 }
 
@@ -169,6 +172,7 @@ distribution targets to shards`,
 					Period:                       cdCfg.syncInterval,
 					RebalancePeriod:              cdCfg.rebalanceInterval,
 					RebalanceHealthRateWatermark: cdCfg.rebalanceHealthRateWatermark,
+					ForceRebalanceInterval:       cdCfg.forceRebalanceInterval,
 				},
 				getReplicasManager(lg),
 				cfgManager.ConfigInfo,

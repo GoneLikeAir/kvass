@@ -48,6 +48,7 @@ type Option struct {
 	RebalancePeriod time.Duration
 	// RebalanceHealthRateWatermark is the watermark to determine whether to run rebalance
 	RebalanceHealthRateWatermark float64
+	ForceRebalanceInterval       time.Duration
 }
 
 // Coordinator periodically re balance all replicates
@@ -62,6 +63,7 @@ type Coordinator struct {
 
 	lastGlobalScrapeStatus map[uint64]*target.ScrapeStatus
 	lastRebalanceTime      time.Time
+	forceRebalanceInterval time.Duration
 }
 
 // NewCoordinator create a new coordinator service
@@ -280,7 +282,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 
 	if !math.IsNaN(currSD) {
 		bestSD = currSD
-		if (avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/6)) && time.Now().Before(c.lastRebalanceTime.Add(time.Hour*24)) {
+		if (avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/6)) && time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
 			if currSD < (avg / 6) {
 				c.log.Debugf("Group: %s, Avg: %f, SD: %f, balance enough, no need to rebalance", groupName, avg, currSD)
 				return nil, false
@@ -289,6 +291,10 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 	} else {
 		c.log.Debugf("rebalance: standard deviation is NaN, cancel to rebalance")
 		return nil, false
+	}
+
+	if time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+		c.log.Infof("force running rebalance in one group, lastRebalanceTime: %s", c.lastRebalanceTime.String())
 	}
 
 	loop := 0
@@ -371,9 +377,13 @@ func (c *Coordinator) tryRebalanceBetweenGroups(
 	targetVector := make(map[uint64]*vector)
 	min, max := getMinMaxSeries(shardSeries)
 	avg := totalSeries / int64(len(shardsMap))
-	if shardSeries[max]-shardSeries[min] < avg/6 && time.Now().Before(c.lastRebalanceTime.Add(time.Hour*24)) {
+	if shardSeries[max]-shardSeries[min] < avg/6 && time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
 		c.log.Infof("balance enough between shards, skip")
 		return targetVector, false
+	}
+
+	if time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+		c.log.Infof("force running rebalance between groups, lastRebalanceTime: %s", c.lastRebalanceTime.String())
 	}
 
 	for i := 0; i <= 10; i++ {
