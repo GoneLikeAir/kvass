@@ -155,7 +155,7 @@ func (c *Coordinator) runOnce() error {
 			scale = c.option.MinShard
 		}
 
-		updateScrapingTargets(shardsInfo, active)
+		c.updateScrapingTargets(shardsInfo, active)
 		c.applyShardsInfo(shardsInfo)
 		if err := repItem.ChangeScale(scale); err != nil {
 			c.log.Error(err.Error())
@@ -188,7 +188,10 @@ func (c *Coordinator) runRebalanceOnce() error {
 		return errors.Wrapf(err, "get replicas")
 	}
 	rebalanced := false
+	beforeRebalanceShardSeries := make(map[string]int64)
+	afterRebalanceShardSeries := make(map[string]int64)
 	for _, repItem := range replicas {
+
 		shards, err := repItem.Shards()
 		if err != nil {
 			c.log.Error(err.Error())
@@ -200,6 +203,22 @@ func (c *Coordinator) runRebalanceOnce() error {
 			shardsInfo       = c.getShardInfos(shards)
 			changeAbleShards = changeAbleShardsInfo(shardsInfo)
 		)
+		totalTarget := 0.0
+		abnormalTarget := 0.0
+		for _, s := range shardsInfo {
+			total := int64(0)
+			for _, t := range s.scraping {
+				totalTarget++
+				if t.TargetState != target.StateNormal {
+					abnormalTarget++
+				}
+				total += t.Series
+			}
+			beforeRebalanceShardSeries[s.shard.ID] = total
+		}
+		if res := abnormalTarget / totalTarget; res > 0.1 {
+			c.log.Warnf("too many abnormal targets, rate %.2f", res)
+		}
 
 		c.lastGlobalScrapeStatus = c.globalScrapeStatus(active, shardsInfo)
 		// if there many target is unhealthy, skip rebalance
@@ -241,18 +260,35 @@ func (c *Coordinator) runRebalanceOnce() error {
 			}
 
 		}
-		shardsGroupedSeries, shardsGroupedScraping, _, shardSeries, shardsMap, totalSeries := getGroupedScrapingInfo(shardsInfo, c.lastGlobalScrapeStatus, groupedTargets)
+		//shardsGroupedSeries, shardsGroupedScraping, _, shardSeries, shardsMap, totalSeries := getGroupedScrapingInfo(shardsInfo, c.lastGlobalScrapeStatus, groupedTargets)
 
-		if vectors, ok := c.tryRebalanceBetweenGroups(shardsMap, groupedTargets, shardSeries, shardsGroupedSeries, shardsGroupedScraping, totalSeries); ok {
-			for h, v := range vectors {
-				transferTarget(v.from, v.to, h)
-			}
-			rebalanced = true
-		}
+		//c.log.Debugf("try to rebalance between groups")
+		//if vectors, ok := c.tryRebalanceBetweenGroups(shardsMap, groupedTargets, shardSeries, shardsGroupedSeries, shardsGroupedScraping, totalSeries); ok {
+		//	for h, v := range vectors {
+		//		transferTarget(v.from, v.to, h)
+		//	}
+		//	rebalanced = true
+		//}
 
-		updateScrapingTargets(shardsInfo, active)
+		c.updateScrapingTargets(shardsInfo, active)
 		c.applyShardsInfo(shardsInfo)
+		for _, s := range shardsInfo {
+			total := int64(0)
+			for _, t := range s.scraping {
+				total += t.Series
+			}
+			afterRebalanceShardSeries[s.shard.ID] = total
+		}
+	}
 
+	c.log.Debugf("*** series assignment before rebalance ***")
+	for k, v := range beforeRebalanceShardSeries {
+		c.log.Debugf("shard: %s, series: %d", k, v)
+	}
+
+	c.log.Debugf("*** series assignment after rebalance ***")
+	for k, v := range afterRebalanceShardSeries {
+		c.log.Debugf("shard: %s, series: %d", k, v)
 	}
 
 	if rebalanced {
@@ -261,6 +297,10 @@ func (c *Coordinator) runRebalanceOnce() error {
 
 	return nil
 
+}
+
+func (c *Coordinator) needForceRebalance() bool {
+	return time.Now().After(c.lastRebalanceTime.Add(c.option.ForceRebalanceInterval))
 }
 
 func (c *Coordinator) tryRebalanceForOneGroup(
@@ -282,7 +322,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 
 	if !math.IsNaN(currSD) {
 		bestSD = currSD
-		if (avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/6)) && time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+		if (avg == 0 || float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg/6)) && !c.needForceRebalance() {
 			if currSD < (avg / 6) {
 				c.log.Debugf("Group: %s, Avg: %f, SD: %f, balance enough, no need to rebalance", groupName, avg, currSD)
 				return nil, false
@@ -293,7 +333,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 		return nil, false
 	}
 
-	if time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+	if c.needForceRebalance() {
 		c.log.Infof("force running rebalance in one group, lastRebalanceTime: %s", c.lastRebalanceTime.String())
 	}
 
@@ -309,7 +349,7 @@ func (c *Coordinator) tryRebalanceForOneGroup(
 
 		minShard, maxShard := getMinMaxSeries(shardSeries)
 
-		if float64(shardSeries[maxShard]-shardSeries[minShard]) < (avg / 10) {
+		if float64(shardSeries[maxShard]-shardSeries[minShard]) <= (avg / 10) {
 			// it seems like balance enough, break
 			break
 		}
@@ -377,12 +417,12 @@ func (c *Coordinator) tryRebalanceBetweenGroups(
 	targetVector := make(map[uint64]*vector)
 	min, max := getMinMaxSeries(shardSeries)
 	avg := totalSeries / int64(len(shardsMap))
-	if shardSeries[max]-shardSeries[min] < avg/6 && time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+	if shardSeries[max]-shardSeries[min] < avg/6 && !c.needForceRebalance() {
 		c.log.Infof("balance enough between shards, skip")
 		return targetVector, false
 	}
 
-	if time.Now().Before(c.lastRebalanceTime.Add(c.forceRebalanceInterval)) {
+	if c.needForceRebalance() {
 		c.log.Infof("force running rebalance between groups, lastRebalanceTime: %s", c.lastRebalanceTime.String())
 	}
 
@@ -394,15 +434,16 @@ func (c *Coordinator) tryRebalanceBetweenGroups(
 			if len(targets) >= len(shardsMap) {
 				continue
 			}
-
 			// only move the target to the shard that not have the target of this group
-			v1, ok1 := shardsGroupedSeries[max][group]
-			v2, ok2 := shardsGroupedSeries[min][group]
-			if !ok1 || ok2 || v1 <= 0 || v2 > 0 {
+			v1, _ := shardsGroupedSeries[max][group]
+			v2, _ := shardsGroupedSeries[min][group]
+			if v1 <= 0 || v2 > 0 {
 				continue
 			}
 
 			diff2 := math.Abs(float64((shardSeries[max] - shardsGroupedSeries[max][group]) - (shardSeries[min] + shardsGroupedSeries[max][group])))
+			c.log.Debugf("max series: %d, min series: %d, maxSeriesForGroup: %d, minSeriesForGroup: %d, diff: %d, diff2: %f",
+				shardSeries[max], shardSeries[min], shardsGroupedSeries[max][group], shardsGroupedSeries[max][group], diff, diff2)
 			if int64(diff2) < diff {
 				i = 0
 				for hash := range shardsGroupedScraping[max][group] {

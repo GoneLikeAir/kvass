@@ -71,19 +71,26 @@ func changeAbleShardsInfo(shards []*shardInfo) []*shardInfo {
 	return ret
 }
 
-func updateScrapingTargets(shards []*shardInfo, active map[uint64]*discovery.SDTargets) {
+func (c *Coordinator) updateScrapingTargets(shards []*shardInfo, active map[uint64]*discovery.SDTargets) {
+	//assigned := make(map[string]bool)
 	for _, s := range shards {
 		s.newTargets = map[string][]*target.Target{}
-		for hash, c := range s.scraping {
+		for hash, status := range s.scraping {
 			tar := active[hash]
 			if tar == nil {
 				continue
 			}
 
 			t := *tar.ShardTarget
-			t.TargetState = c.TargetState
-			t.Series = c.Series
+			t.TargetState = status.TargetState
+			t.Series = status.Series
+			//key := fmt.Sprintf("%d-%s", t.Hash, t.TargetState)
+			//if _, ok := assigned[key]; ok {
+			//	c.log.Debugf("target %s is already assigned", key)
+			//	continue
+			//}
 			s.newTargets[tar.Job] = append(s.newTargets[tar.Job], &t)
+			//assigned[key] = true
 		}
 	}
 }
@@ -563,7 +570,8 @@ func getClosestTarget(shardState *simpleShardState, diff int64, targets map[uint
 	valid := false
 	for hash, series := range shardState.scraping {
 		tmp := math.Abs(float64(series) - float64(diff))
-		if _, ok := targets[hash]; ok && (result == 0 || tmp <= minDiff) {
+		if t, ok := targets[hash]; ok && t.ShardTarget != nil &&
+			t.ShardTarget.TargetState == target.StateNormal && (result == 0 || tmp <= minDiff) {
 			if series < minSeries {
 				minDiff = tmp
 				result = hash
@@ -673,7 +681,7 @@ func getShardStandardDeviation(
 
 	for hash := range targets {
 		status := lastGlobalScrapeStatus[hash]
-		if status == nil || status.Health != scrape.HealthGood {
+		if status == nil || status.Health != scrape.HealthGood || status.TargetState != target.StateNormal {
 			continue
 		}
 		total += status.Series
