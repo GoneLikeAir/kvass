@@ -132,26 +132,143 @@ func (j *JobInfo) Scrape(url string) ([]byte, string, error) {
 }
 
 // StatisticSeries statistic load from metrics raw data
-func StatisticSeries(b []byte, contentType string, rc []*relabel.Config) (total int64, err error) {
+func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string, rc []*relabel.Config) (total int64, err error) {
 	var (
 		p  = textparse.New(b, contentType)
 		et textparse.Entry
 	)
-	for {
-		if et, err = p.Next(); err != nil {
-			if err == io.EOF {
-				err = nil
-			}
-			return total, err
-		}
+	targetInfo := MetricCollector.GetTargetInfo(URL.Host, URL.Path)
+	//metricInfos := make(map[string]*MetricInfo)
+	//defer func() {
+	//	content := GenerateMarkdownTable(metricInfos)
+	//	filename := fmt.Sprintf("/tmp/%s.md", jobName)
+	//	err := ioutil.WriteFile(filename, []byte(content), 0644)
+	//	if err != nil {
+	//		fmt.Printf("Error writing to file %s: %v\n", filename, err)
+	//	}
+	//}()
 
-		switch et {
-		case textparse.EntrySeries:
-			var lset labels.Labels
-			_ = p.Metric(&lset)
-			if newSets := relabel.Process(lset, rc...); newSets != nil {
-				total++
+	if MetricCollector == nil || !MetricCollector.NeedCollect(jobName) {
+		for {
+			if et, err = p.Next(); err != nil {
+				if err == io.EOF {
+					err = nil
+				}
+				return total, err
+			}
+
+			switch et {
+			case textparse.EntrySeries:
+				var lset labels.Labels
+				_ = p.Metric(&lset)
+				if newSets := relabel.Process(lset, rc...); newSets != nil {
+					total++
+				}
+			}
+		}
+	} else {
+		for {
+			if et, err = p.Next(); err != nil {
+				if err == io.EOF {
+					err = nil
+				}
+				return total, err
+			}
+
+			switch et {
+			case textparse.EntrySeries:
+				var lset labels.Labels
+				_ = p.Metric(&lset)
+				if newSets := relabel.Process(lset, rc...); newSets != nil {
+					total++
+				}
+				subsystem := ""
+				if targetInfo != nil {
+					lset = append(lset, targetInfo.Labels...)
+					subsystem = lset.Get("subsystem")
+					if subsystem == "" {
+						subsystem = lset.Get("subsystemId")
+					}
+				}
+				name := lset.Get("__name__")
+				MetricCollector.AddLabels(jobName, name, lset)
+				MetricCollector.AddSubsystemInfo(jobName, name, subsystem)
+			case textparse.EntryType:
+				bs, t := p.Type()
+				name := string(bs)
+				MetricCollector.AddType(jobName, name, string(t))
+			case textparse.EntryHelp:
+				bs, t := p.Help()
+				name := string(bs)
+				MetricCollector.AddHelp(jobName, name, string(t))
+			case textparse.EntryUnit:
+				bs, t := p.Unit()
+				name := string(bs)
+				MetricCollector.AddUnit(jobName, name, string(t))
 			}
 		}
 	}
+	//for {
+	//	if et, err = p.Next(); err != nil {
+	//		if err == io.EOF {
+	//			err = nil
+	//		}
+	//		return total, err
+	//	}
+	//
+	//	switch et {
+	//	case textparse.EntrySeries:
+	//		var lset labels.Labels
+	//		_ = p.Metric(&lset)
+	//		if newSets := relabel.Process(lset, rc...); newSets != nil {
+	//			total++
+	//		}
+	//		name := lset.Get("__name__")
+	//
+	//		mi, ok := metricInfos[name]
+	//		if !ok {
+	//			mi = NewMetricInfo(name)
+	//			metricInfos[name] = mi
+	//		}
+	//		for _, l := range lset {
+	//			if l.Name == "__name__" {
+	//				continue
+	//			}
+	//			if _, ok := mi.ExistsLabels[l.Name]; ok {
+	//				continue
+	//			}
+	//			mi.Labels = append(mi.Labels, l.Name)
+	//			mi.ExistsLabels[l.Name] = true
+	//		}
+	//		//bs, _ := json.Marshal(lset)
+	//		//fmt.Printf("Series entry: %s, labels: %s\n", m, string(bs))
+	//	case textparse.EntryType:
+	//		bs, t := p.Type()
+	//		name := string(bs)
+	//		mi, ok := metricInfos[name]
+	//		if !ok {
+	//			mi = NewMetricInfo(name)
+	//			metricInfos[name] = mi
+	//		}
+	//		mi.Type = string(t)
+	//	case textparse.EntryHelp:
+	//		bs, t := p.Help()
+	//		name := string(bs)
+	//		mi, ok := metricInfos[name]
+	//		if !ok {
+	//			mi = NewMetricInfo(name)
+	//			metricInfos[name] = mi
+	//		}
+	//		mi.Help = string(t)
+	//	case textparse.EntryUnit:
+	//		bs, t := p.Unit()
+	//		name := string(bs)
+	//		mi, ok := metricInfos[name]
+	//		if !ok {
+	//			mi = NewMetricInfo(name)
+	//			metricInfos[name] = mi
+	//		}
+	//		mi.Unit = string(t)
+	//	}
+	//}
 }

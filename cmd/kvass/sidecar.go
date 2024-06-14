@@ -76,6 +76,7 @@ var sidecarCmd = &cobra.Command{
 			configManager = prom.NewConfigManager()
 			targetManager = sidecar.NewTargetsManager(sidecarCfg.storePath, log.WithField("component", "targets manager"))
 
+			_     = scrape.InitMetricCollector(sidecarCfg.configOutFile)
 			proxy = sidecar.NewProxy(
 				scrapeManager.GetJob,
 				func() map[uint64]*target.ScrapeStatus {

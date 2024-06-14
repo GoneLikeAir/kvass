@@ -90,14 +90,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}
 	}()
-
 	data, contentType, err := jobInfo.Scrape(realURL.String())
 	if err != nil {
 		scrapErr = fmt.Errorf("get data %v", err)
 		return
 	}
 
-	series, err := scrape.StatisticSeries(data, contentType, jobInfo.Config.MetricRelabelConfigs)
+	series, err := scrape.StatisticSeries(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs)
 	if err != nil {
 		scrapErr = fmt.Errorf("StatisticSeries failed %v", err)
 		return

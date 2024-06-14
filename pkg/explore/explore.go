@@ -20,6 +20,7 @@ package explore
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"tkestack.io/kvass/pkg/discovery"
 	"tkestack.io/kvass/pkg/prom"
 	"tkestack.io/kvass/pkg/scrape"
@@ -50,7 +51,7 @@ type Explore struct {
 
 	retryInterval time.Duration
 	needExplore   chan *exploringTarget
-	explore       func(scrapeInfo *scrape.JobInfo, url string) (int64, error)
+	explore       func(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, error)
 }
 
 // New create a new Explore
@@ -172,7 +173,7 @@ func (e *Explore) exploreOnce(ctx context.Context, t *exploringTarget) (err erro
 	}
 
 	url := t.target.URL(info.Config).String()
-	series, err := e.explore(info, url)
+	series, err := e.explore(info, t.target.URL(info.Config), url)
 	if err != nil {
 		return errors.Wrapf(err, "explore failed : %s/%s", t.job, url)
 	}
@@ -182,10 +183,10 @@ func (e *Explore) exploreOnce(ctx context.Context, t *exploringTarget) (err erro
 	return nil
 }
 
-func explore(scrapeInfo *scrape.JobInfo, url string) (int64, error) {
-	data, typ, err := scrapeInfo.Scrape(url)
+func explore(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, error) {
+	data, typ, err := scrapeInfo.Scrape(URL.String())
 	if err != nil {
 		return 0, err
 	}
-	return scrape.StatisticSeries(data, typ, scrapeInfo.Config.MetricRelabelConfigs)
+	return scrape.StatisticSeries(scrapeInfo.Config.JobName, URL, data, typ, scrapeInfo.Config.MetricRelabelConfigs)
 }
