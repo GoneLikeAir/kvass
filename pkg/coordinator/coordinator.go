@@ -205,7 +205,8 @@ func (c *Coordinator) runRebalanceOnce() error {
 		)
 		totalTarget := 0.0
 		abnormalTarget := 0.0
-		for _, s := range shardsInfo {
+		canRebalance := true
+		for hash, s := range shardsInfo {
 			total := int64(0)
 			for _, t := range s.scraping {
 				totalTarget++
@@ -213,8 +214,16 @@ func (c *Coordinator) runRebalanceOnce() error {
 					abnormalTarget++
 				}
 				total += t.Series
+				if t.Health == "up" && t.ScrapeTimes < minWaitScrapeTimes {
+					canRebalance = false
+					c.log.Warnf("the scrapeTime of target %s less then minWaitScrapeTimes(%s), skip rebalance", hash, t.ScrapeTimes)
+
+				}
 			}
 			beforeRebalanceShardSeries[s.shard.ID] = total
+		}
+		if !canRebalance {
+			return nil
 		}
 		if res := abnormalTarget / totalTarget; res > 0.1 {
 			c.log.Warnf("too many abnormal targets, rate %.2f", res)
