@@ -216,7 +216,7 @@ func (c *Coordinator) runRebalanceOnce() error {
 				total += t.Series
 				if t.Health == "up" && t.ScrapeTimes < minWaitScrapeTimes {
 					canRebalance = false
-					c.log.Warnf("the scrapeTime of target %s less then minWaitScrapeTimes(%s), skip rebalance", hash, t.ScrapeTimes)
+					c.log.Warnf("the scrapeTime of target %d less then minWaitScrapeTimes(%d), skip rebalance", hash, t.ScrapeTimes)
 
 				}
 			}
