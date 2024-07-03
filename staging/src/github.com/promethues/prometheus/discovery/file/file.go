@@ -301,6 +301,7 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 		case event := <-d.eventCh:
 			// fsnotify sometimes sends a bunch of events without name or operation.
 			// It's unclear what they are and why they are sent - filter them out.
+			level.Info(d.logger).Log("msg", "got event", "uuid", d.uuid, "path", strings.Join(d.paths, ","))
 			if len(event.Name) == 0 {
 				break
 			}

@@ -33,31 +33,35 @@ func (w *Watcher) watching() {
 		select {
 		case event := <-w.watcher.Events:
 			w.mutex.Lock()
-			for _, ch := range w.chanMap {
+			for uuid, ch := range w.chanMap {
+				fmt.Printf("FileWatcher: send event to chan %s \n", uuid)
 				ch <- event
 			}
 			w.mutex.Unlock()
 		case err := <-w.watcher.Errors:
 			if err != nil {
-				fmt.Printf("%s msg=%s err=%s", time.Now().String(), "Error watching file", err.Error())
+				fmt.Printf("%s msg=%s err=%s \n", time.Now().String(), "Error watching file", err.Error())
 			}
 		}
 	}
 }
 
 func (w *Watcher) Register(uuid string, eventCh chan fsnotify.Event) {
+	fmt.Printf("FileWatcher: Register chan %s \n", uuid)
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	w.chanMap[uuid] = eventCh
 }
 
 func (w *Watcher) UnRegister(uuid string) {
+	fmt.Printf("FileWatcher: UnRegister path %s \n", uuid)
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	delete(w.chanMap, uuid)
 }
 
 func (w *Watcher) AddPath(uuid, path string) error {
+	fmt.Printf("FileWatcher: add path %s \n", path)
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	err := w.watcher.Add(path)
@@ -68,10 +72,12 @@ func (w *Watcher) AddPath(uuid, path string) error {
 		w.watchingPathMap[path] = 0
 	}
 	w.watchingPathMap[path] = w.watchingPathMap[path] + 1
+	fmt.Printf("FileWatcher: %s watching count %d \n", path, w.watchingPathMap[path])
 	return nil
 }
 
 func (w *Watcher) RemovePath(uuid, path string) error {
+	fmt.Printf("FileWatcher: removing path %s \n", path)
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -79,6 +85,7 @@ func (w *Watcher) RemovePath(uuid, path string) error {
 		w.watchingPathMap[path] = w.watchingPathMap[path] - 1
 	}
 	if w.watchingPathMap[path] == 0 {
+		fmt.Printf("FileWatcher: need to remove from fsWatcher, path %s \n", path)
 		err := w.watcher.Remove(path)
 		if err != nil {
 			return err
