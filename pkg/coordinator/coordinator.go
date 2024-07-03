@@ -106,10 +106,9 @@ func (c *Coordinator) LastGlobalScrapeStatus() map[uint64]*target.ScrapeStatus {
 // do shard reBalance and change expect shard number
 func (c *Coordinator) runOnce() error {
 	//<-c.concurrencyLock
-	//defer func() {
-	//	c.concurrencyLock <- 1
-	//	c.log.Debug("finish coordinate.")
-	//}()
+	defer func() {
+		c.log.Debug("finish coordinate.")
+	}()
 	if c.atomicInt.Inc()%10 == 1 {
 		c.log.Debug("need to run rebalance.")
 		return c.runRebalanceOnce()
@@ -184,9 +183,9 @@ func (c *Coordinator) RunRebalance(ctx context.Context) error {
 
 // runRebalanceOnce will rebalance targets for every job, and then will try to rebalance between shards
 func (c *Coordinator) runRebalanceOnce() error {
-	<-c.concurrencyLock
+	//<-c.concurrencyLock
 	defer func() {
-		c.concurrencyLock <- 1
+		//c.concurrencyLock <- 1
 		c.log.Debug("finish rebalance.")
 	}()
 
