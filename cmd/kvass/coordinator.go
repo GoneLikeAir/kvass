@@ -156,7 +156,7 @@ distribution targets to shards`,
 				Level:  level,
 				Format: format,
 			})
-			_                      = scrape.InitMetricCollector(sidecarCfg.configOutFile)
+			_                      = scrape.InitMetricCollector(sidecarCfg.configFile)
 			scrapeManager          = scrape.New(lg.WithField("component", "scrape discovery"))
 			discoveryManagerScrape = prom_discovery.NewManager(context.Background(), log.With(logger, "component", "discovery manager scrape"), prom_discovery.Name("scrape"))
 			targetDiscovery        = discovery.New(lg.WithField("component", "target discovery"))
@@ -248,12 +248,12 @@ distribution targets to shards`,
 			return cd.Run(ctx)
 		})
 
-		if cdCfg.rebalanceEnable {
-			g.Go(func() error {
-				lg.Infof("rebalance start")
-				return cd.RunRebalance(ctx)
-			})
-		}
+		//if cdCfg.rebalanceEnable {
+		//	g.Go(func() error {
+		//		lg.Infof("rebalance start")
+		//		return cd.RunRebalance(ctx)
+		//	})
+		//}
 
 		g.Go(func() error {
 			lg.Infof("api start at %s", cdCfg.webAddress)

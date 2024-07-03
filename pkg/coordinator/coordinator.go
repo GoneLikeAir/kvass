@@ -20,6 +20,7 @@ package coordinator
 import (
 	"context"
 	"github.com/pkg/errors"
+	"go.uber.org/atomic"
 	"math"
 	"time"
 	"tkestack.io/kvass/pkg/discovery"
@@ -64,6 +65,7 @@ type Coordinator struct {
 	lastGlobalScrapeStatus map[uint64]*target.ScrapeStatus
 	lastRebalanceTime      time.Time
 	forceRebalanceInterval time.Duration
+	atomicInt              *atomic.Int64
 }
 
 // NewCoordinator create a new coordinator service
@@ -86,6 +88,7 @@ func NewCoordinator(
 		log:                    log,
 		concurrencyLock:        ch,
 		lastGlobalScrapeStatus: make(map[uint64]*target.ScrapeStatus),
+		atomicInt:              atomic.NewInt64(int64(0)),
 	}
 }
 
@@ -102,11 +105,15 @@ func (c *Coordinator) LastGlobalScrapeStatus() map[uint64]*target.ScrapeStatus {
 // runOnce get shards information from shard manager,
 // do shard reBalance and change expect shard number
 func (c *Coordinator) runOnce() error {
-	<-c.concurrencyLock
-	defer func() {
-		c.concurrencyLock <- 1
-		c.log.Debug("finish coordinate.")
-	}()
+	//<-c.concurrencyLock
+	//defer func() {
+	//	c.concurrencyLock <- 1
+	//	c.log.Debug("finish coordinate.")
+	//}()
+	if c.atomicInt.Inc()%10 == 1 {
+		c.log.Debug("need to run rebalance.")
+		return c.runRebalanceOnce()
+	}
 
 	replicas, err := c.reManager.Replicas()
 	if err != nil {
