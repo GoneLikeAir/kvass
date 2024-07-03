@@ -206,9 +206,9 @@ func (c *Coordinator) runRebalanceOnce() error {
 		totalTarget := 0.0
 		abnormalTarget := 0.0
 		canRebalance := true
-		for hash, s := range shardsInfo {
+		for _, s := range shardsInfo {
 			total := int64(0)
-			for _, t := range s.scraping {
+			for hash, t := range s.scraping {
 				totalTarget++
 				if t.TargetState != target.StateNormal {
 					abnormalTarget++
