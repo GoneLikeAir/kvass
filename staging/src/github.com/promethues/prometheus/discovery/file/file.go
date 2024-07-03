@@ -60,40 +60,41 @@ var (
 		RefreshInterval: model.Duration(5 * time.Minute),
 	}
 
-	watcher, _ = fsnotify.NewWatcher()
-	chanMap    = sync.Map{}
+	watcher = NewWatcher()
+	//watcher, _ = fsnotify.NewWatcher()
+	//chanMap    = sync.Map{}
 )
 
 func init() {
 	discovery.RegisterConfig(&SDConfig{})
 	prometheus.MustRegister(fileSDScanDuration, fileSDReadErrorsCount, fileSDTimeStamp)
-	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				chanMap.Range(func(key, value interface{}) bool {
-					ch := value.(chan fsnotify.Event)
-					ch <- event
-					return true
-				})
-				//fp := ""
-				//fileMap.Range(func(key, value interface{}) bool {
-				//	if strings.HasPrefix(event.Name, key.(string)) {
-				//		fp = key.(string)
-				//		return false
-				//	}
-				//	return true
-				//})
-				//
-				//if id, ok := fileMap.Load(fp); ok {
-				//	if ch, ok := chanMap.Load(id.(string)); ok {
-				//		ch.(chan fsnotify.Event) <- event
-				//	}
-				//}
-
-			}
-		}
-	}()
+	//go func() {
+	//	for {
+	//		select {
+	//		case event := <-watcher.Events:
+	//			chanMap.Range(func(key, value interface{}) bool {
+	//				ch := value.(chan fsnotify.Event)
+	//				ch <- event
+	//				return true
+	//			})
+	//			//fp := ""
+	//			//fileMap.Range(func(key, value interface{}) bool {
+	//			//	if strings.HasPrefix(event.Name, key.(string)) {
+	//			//		fp = key.(string)
+	//			//		return false
+	//			//	}
+	//			//	return true
+	//			//})
+	//			//
+	//			//if id, ok := fileMap.Load(fp); ok {
+	//			//	if ch, ok := chanMap.Load(id.(string)); ok {
+	//			//		ch.(chan fsnotify.Event) <- event
+	//			//	}
+	//			//}
+	//
+	//		}
+	//	}
+	//}()
 }
 
 // SDConfig is the configuration for file based discovery.
@@ -202,8 +203,8 @@ func NewTimestampCollector() *TimestampCollector {
 // on files that contain target groups in JSON or YAML format. Refreshing
 // happens using file watches and periodic refreshes.
 type Discovery struct {
-	paths      []string
-	watcher    *fsnotify.Watcher
+	paths []string
+	//watcher    *fsnotify.Watcher
 	interval   time.Duration
 	timestamps map[string]float64
 	lock       sync.RWMutex
@@ -236,7 +237,8 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) *Discovery {
 	//for _, fp := range conf.Files {
 	//	fileMap.Store(fp, id)
 	//}
-	chanMap.Store(id, eventChan)
+	watcher.Register(id, eventChan)
+	//chanMap.Store(id, eventChan)
 	fileSDTimeStamp.addDiscoverer(disc)
 	return disc
 }
@@ -258,9 +260,9 @@ func (d *Discovery) listFiles() []string {
 // watchFiles sets watches on all full paths or directories that were configured for
 // this file discovery.
 func (d *Discovery) watchFiles() {
-	if d.watcher == nil {
-		panic("no watcher configured")
-	}
+	//if d.watcher == nil {
+	//	panic("no watcher configured")
+	//}
 	for _, p := range d.paths {
 		if idx := strings.LastIndex(p, "/"); idx > -1 {
 			// comment by alexli, try to decrease the using of inotify
@@ -268,7 +270,8 @@ func (d *Discovery) watchFiles() {
 		} else {
 			p = "./"
 		}
-		if err := d.watcher.Add(p); err != nil {
+		//watcher.AddPath(d.uuid, p)
+		if err := watcher.AddPath(d.uuid, p); err != nil {
 			level.Error(d.logger).Log("msg", "Error adding file watch", "path", p, "err", err)
 		}
 	}
@@ -281,7 +284,7 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	//	level.Error(d.logger).Log("msg", "Error adding file watcher", "err", err)
 	//	return
 	//}
-	d.watcher = watcher
+	//d.watcher = watcher
 	defer d.stop()
 
 	d.refresh(ctx, ch)
@@ -316,10 +319,10 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 			// those files forever.
 			d.refresh(ctx, ch)
 
-		case err := <-d.watcher.Errors:
-			if err != nil {
-				level.Error(d.logger).Log("msg", "Error watching file", "err", err)
-			}
+			//case err := <-d.watcher.Errors:
+			//	if err != nil {
+			//		level.Error(d.logger).Log("msg", "Error watching file", "err", err)
+			//	}
 		}
 	}
 
@@ -350,9 +353,9 @@ func (d *Discovery) stop() {
 	go func() {
 		for {
 			select {
-			case <-d.watcher.Errors:
-			case <-d.watcher.Events:
-				// Drain all events and errors.
+			//case <-d.watcher.Errors:
+			//case <-d.watcher.Events:
+			// Drain all events and errors.
 			case <-done:
 				return
 			}
@@ -366,11 +369,12 @@ func (d *Discovery) stop() {
 			//p = filepath.Join("./", p)
 			p = "./"
 		}
-		if err := d.watcher.Remove(p); err != nil {
+		if err := watcher.RemovePath(d.uuid, p); err != nil {
 			level.Error(d.logger).Log("msg", "Error closing file watcher", "paths", fmt.Sprintf("%v", p), "err", err)
 		}
 	}
-	chanMap.Delete(d.uuid)
+	//chanMap.Delete(d.uuid)
+	watcher.UnRegister(d.uuid)
 	close(d.eventCh)
 
 	level.Info(d.logger).Log("msg", "File discovery stopped")
