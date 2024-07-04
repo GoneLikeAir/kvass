@@ -291,7 +291,7 @@ func (c *Coordinator) alleviateShard(s *shardInfo, changeAbleShards []*shardInfo
 			}
 		}
 	}
-	if transferring/totalTargets > 0.3 {
+	if transferring/totalTargets > 0.15 {
 		c.log.Infof("too many targets in transferring state, cancel to alleviate")
 		return
 	}
