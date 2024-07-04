@@ -280,7 +280,21 @@ func (c *Coordinator) alleviateShard(s *shardInfo, changeAbleShards []*shardInfo
 		return 0
 	}
 
-	c.log.Infof("%s need alleviate", s.shard.ID)
+	c.log.Infof("%s need alleviate, expSeries %d", s.shard.ID, expSeries)
+	transferring := 0.0
+	totalTargets := 0.0
+	for _, shard := range changeAbleShards {
+		for _, tar := range shard.scraping {
+			totalTargets++
+			if tar.TargetState == target.StateInTransfer {
+				transferring++
+			}
+		}
+	}
+	if transferring/totalTargets > 0.3 {
+		c.log.Infof("too many targets in transferring state, cancel to alleviate")
+		return
+	}
 	for hash, tar := range s.scraping {
 		if total <= expSeries {
 			break
