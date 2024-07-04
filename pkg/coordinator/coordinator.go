@@ -143,6 +143,7 @@ func (c *Coordinator) runOnce() error {
 		lastGlobalScrapeStatus := c.globalScrapeStatus(active, shardsInfo)
 		c.gcTargets(changeAbleShards, active)
 		needSpace := c.alleviateShards(changeAbleShards)
+		c.log.Infof("need space %d for alleviating", needSpace)
 		needSpace += c.assignNoScrapingTargets(shardsInfo, active, lastGlobalScrapeStatus)
 
 		scale := int32(len(shardsInfo))
