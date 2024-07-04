@@ -10,7 +10,7 @@ import (
 type Watcher struct {
 	mutex           sync.Mutex
 	watcher         *fsnotify.Watcher
-	chanMap         map[string]chan fsnotify.Event
+	chanMap         sync.Map //map[string]chan fsnotify.Event
 	watchingPathMap map[string]map[string]bool
 }
 
@@ -19,7 +19,7 @@ func NewWatcher() *Watcher {
 	w := &Watcher{
 		mutex:           sync.Mutex{},
 		watcher:         watcher,
-		chanMap:         make(map[string]chan fsnotify.Event),
+		chanMap:         sync.Map{}, //make(map[string]chan fsnotify.Event),
 		watchingPathMap: make(map[string]map[string]bool),
 	}
 	go w.watching()
@@ -30,14 +30,20 @@ func (w *Watcher) watching() {
 	for {
 		select {
 		case event := <-w.watcher.Events:
-			fmt.Printf("FileWatcher: try to get lock when sending event \n")
-			w.mutex.Lock()
-			fmt.Printf("FileWatcher: sending event get lock\n")
-			for uuid, ch := range w.chanMap {
-				fmt.Printf("FileWatcher: send event to chan %s \n", uuid)
+			//fmt.Printf("FileWatcher: try to get lock when sending event \n")
+			//w.mutex.Lock()
+			//fmt.Printf("FileWatcher: sending event get lock\n")
+			w.chanMap.Range(func(key, value interface{}) bool {
+				fmt.Printf("FileWatcher: send event to chan %s \n", key.(string))
+				ch := value.(chan fsnotify.Event)
 				ch <- event
-			}
-			w.mutex.Unlock()
+				return true
+			})
+			//for uuid, ch := range w.chanMap {
+			//	fmt.Printf("FileWatcher: send event to chan %s \n", uuid)
+			//	ch <- event
+			//}
+			//w.mutex.Unlock()
 			fmt.Printf("FileWatcher: release event get lock\n")
 		case err := <-w.watcher.Errors:
 			if err != nil {
@@ -49,26 +55,28 @@ func (w *Watcher) watching() {
 
 func (w *Watcher) Register(uuid string, eventCh chan fsnotify.Event) {
 	fmt.Printf("FileWatcher: Register chan %s \n", uuid)
-	w.mutex.Lock()
-	fmt.Printf("FileWatcher: Register try to get lock %s \n", uuid)
-	fmt.Printf("FileWatcher: Register get lock %s \n", uuid)
-	defer func() {
-		w.mutex.Unlock()
-		fmt.Printf("FileWatcher: Register release lock %s \n", uuid)
-	}()
-	w.chanMap[uuid] = eventCh
+	//w.mutex.Lock()
+	//fmt.Printf("FileWatcher: Register try to get lock %s \n", uuid)
+	//fmt.Printf("FileWatcher: Register get lock %s \n", uuid)
+	//defer func() {
+	//	w.mutex.Unlock()
+	//	fmt.Printf("FileWatcher: Register release lock %s \n", uuid)
+	//}()
+	w.chanMap.Store(uuid, eventCh)
+	//w.chanMap[uuid] = eventCh
 }
 
 func (w *Watcher) UnRegister(uuid string) {
-	fmt.Printf("FileWatcher: UnRegister path %s \n", uuid)
-	fmt.Printf("FileWatcher: UnRegister try to get lock %s \n", uuid)
-	w.mutex.Lock()
-	fmt.Printf("FileWatcher: UnRegister get lock %s \n", uuid)
-	defer func() {
-		w.mutex.Unlock()
-		fmt.Printf("FileWatcher: UnRegister release lock %s \n", uuid)
-	}()
-	delete(w.chanMap, uuid)
+	//fmt.Printf("FileWatcher: UnRegister path %s \n", uuid)
+	//fmt.Printf("FileWatcher: UnRegister try to get lock %s \n", uuid)
+	//w.mutex.Lock()
+	//fmt.Printf("FileWatcher: UnRegister get lock %s \n", uuid)
+	//defer func() {
+	//	w.mutex.Unlock()
+	//	fmt.Printf("FileWatcher: UnRegister release lock %s \n", uuid)
+	//}()
+	w.chanMap.Delete(uuid)
+	//delete(w.chanMap, uuid)
 }
 
 func (w *Watcher) AddPath(uuid, path string) error {
