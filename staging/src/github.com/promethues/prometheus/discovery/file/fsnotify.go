@@ -11,7 +11,7 @@ type Watcher struct {
 	mutex           sync.Mutex
 	watcher         *fsnotify.Watcher
 	chanMap         map[string]chan fsnotify.Event
-	watchingPathMap map[string]int
+	watchingPathMap map[string]map[string]bool
 }
 
 func NewWatcher() *Watcher {
@@ -20,7 +20,7 @@ func NewWatcher() *Watcher {
 		mutex:           sync.Mutex{},
 		watcher:         watcher,
 		chanMap:         make(map[string]chan fsnotify.Event),
-		watchingPathMap: make(map[string]int),
+		watchingPathMap: make(map[string]map[string]bool),
 	}
 	go w.watching()
 	return w
@@ -69,10 +69,10 @@ func (w *Watcher) AddPath(uuid, path string) error {
 		return err
 	}
 	if _, ok := w.watchingPathMap[path]; !ok {
-		w.watchingPathMap[path] = 0
+		w.watchingPathMap[path] = make(map[string]bool)
 	}
-	w.watchingPathMap[path] = w.watchingPathMap[path] + 1
-	fmt.Printf("FileWatcher: %s watching count %d \n", path, w.watchingPathMap[path])
+	w.watchingPathMap[path][uuid] = true
+	fmt.Printf("FileWatcher: %s watching count %d \n", path, len(w.watchingPathMap[path]))
 	return nil
 }
 
@@ -81,10 +81,9 @@ func (w *Watcher) RemovePath(uuid, path string) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if w.watchingPathMap[path] > 0 {
-		w.watchingPathMap[path] = w.watchingPathMap[path] - 1
-	}
-	if w.watchingPathMap[path] == 0 {
+	delete(w.watchingPathMap[path], uuid)
+
+	if len(w.watchingPathMap[path]) == 0 {
 		fmt.Printf("FileWatcher: need to remove from fsWatcher, path %s \n", path)
 		err := w.watcher.Remove(path)
 		if err != nil {
