@@ -67,7 +67,7 @@ func (w *Watcher) Register(uuid string, eventCh chan fsnotify.Event) {
 }
 
 func (w *Watcher) UnRegister(uuid string) {
-	//fmt.Printf("FileWatcher: UnRegister path %s \n", uuid)
+	fmt.Printf("FileWatcher: UnRegister path %s \n", uuid)
 	//fmt.Printf("FileWatcher: UnRegister try to get lock %s \n", uuid)
 	//w.mutex.Lock()
 	//fmt.Printf("FileWatcher: UnRegister get lock %s \n", uuid)
