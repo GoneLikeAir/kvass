@@ -105,10 +105,16 @@ func (s *Service) Run(address string) error {
 }
 
 func (s *Service) runtimeInfo(g *gin.Context) *api.Result {
-	series, err := s.getHeadSeries()
-	if err != nil {
-		return api.InternalErr(err, "get runtime from prometheus")
+	series := int64(0)
+	for _, ss := range s.targetManager.TargetsInfo().Status {
+		series = series + ss.Series
 	}
+
+	// todo: try do not get series from TSDB
+	//series, err := s.getHeadSeries()
+	//if err != nil {
+	//	return api.InternalErr(err, "get runtime from prometheus")
+	//}
 
 	targets := s.targetManager.TargetsInfo()
 
