@@ -205,6 +205,7 @@ func NewTimestampCollector() *TimestampCollector {
 type Discovery struct {
 	paths []string
 	//watcher    *fsnotify.Watcher
+	watcher    *Watcher
 	interval   time.Duration
 	timestamps map[string]float64
 	lock       sync.RWMutex
@@ -233,6 +234,7 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) *Discovery {
 		logger:     logger,
 		uuid:       id,
 		eventCh:    eventChan,
+		watcher:    watcher,
 	}
 	//for _, fp := range conf.Files {
 	//	fileMap.Store(fp, id)
@@ -271,7 +273,7 @@ func (d *Discovery) watchFiles() {
 			p = "./"
 		}
 		//watcher.AddPath(d.uuid, p)
-		if err := watcher.AddPath(d.uuid, p); err != nil {
+		if err := d.watcher.AddPath(d.uuid, p); err != nil {
 			level.Error(d.logger).Log("msg", "Error adding file watch", "path", p, "err", err)
 		}
 	}
@@ -370,12 +372,12 @@ func (d *Discovery) stop() {
 			//p = filepath.Join("./", p)
 			p = "./"
 		}
-		if err := watcher.RemovePath(d.uuid, p); err != nil {
+		if err := d.watcher.RemovePath(d.uuid, p); err != nil {
 			level.Error(d.logger).Log("msg", "Error closing file watcher", "paths", fmt.Sprintf("%v", p), "err", err)
 		}
 	}
 	//chanMap.Delete(d.uuid)
-	watcher.UnRegister(d.uuid)
+	d.watcher.UnRegister(d.uuid)
 	close(d.eventCh)
 
 	level.Info(d.logger).Log("msg", "File discovery stopped")
