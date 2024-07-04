@@ -356,12 +356,15 @@ func (c *Coordinator) assignNoScrapingTargets(
 	}
 
 	for hash, tar := range active {
+		c.log.Debugf("active target info: hash=%, job=%s, url=%s", hash, tar.Job, tar.PromTarget.URL().String())
 		if scraping[hash] {
+			c.log.Debugf("target %s already scraping", hash)
 			continue
 		}
 
 		status := globalScrapeStatus[hash]
 		if status == nil || status.Health != scrape.HealthGood {
+			c.log.Debugf("target %s not healthy", hash)
 			continue
 		}
 
@@ -375,6 +378,7 @@ func (c *Coordinator) assignNoScrapingTargets(
 			sd.runtime.HeadSeries += status.Series
 			sd.scraping[hash] = status
 		} else {
+			c.log.Debugf("no shard free for %s, need space %d", hash, status.Series)
 			needSpace += status.Series
 		}
 	}
