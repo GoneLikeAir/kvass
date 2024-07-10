@@ -356,15 +356,15 @@ func (c *Coordinator) assignNoScrapingTargets(
 	}
 
 	for hash, tar := range active {
-		c.log.Debugf("active target info: hash=%d, job=%s, url=%s", hash, tar.Job, tar.PromTarget.URL().String())
+		//c.log.Debugf("active target info: hash=%d, job=%s, url=%s", hash, tar.Job, tar.PromTarget.URL().String())
 		if scraping[hash] {
-			c.log.Debugf("target %d already scraping", hash)
+			//c.log.Debugf("target %d already scraping", hash)
 			continue
 		}
 
 		status := globalScrapeStatus[hash]
 		if status == nil || status.Health != scrape.HealthGood {
-			c.log.Debugf("target %d not healthy", hash)
+			c.log.Debugf("target %d not healthy, job=%s, url=%s", hash, tar.Job, tar.PromTarget.URL().String())
 			continue
 		}
 
