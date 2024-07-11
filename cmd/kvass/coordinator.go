@@ -156,7 +156,7 @@ distribution targets to shards`,
 				Level:  level,
 				Format: format,
 			})
-			_                      = scrape.InitMetricCollector(sidecarCfg.configFile)
+			_                      = scrape.InitMetricCollector(sidecarCfg.configFile, false)
 			scrapeManager          = scrape.New(lg.WithField("component", "scrape discovery"))
 			discoveryManagerScrape = prom_discovery.NewManager(context.Background(), log.With(logger, "component", "discovery manager scrape"), prom_discovery.Name("scrape"))
 			targetDiscovery        = discovery.New(lg.WithField("component", "target discovery"))

@@ -49,7 +49,7 @@ func NewMetricInfo(name string) *MetricInfo {
 	}
 }
 
-func InitMetricCollector(configPath string) *MetricInfoCollector {
+func InitMetricCollector(configPath string, runTask ...bool) *MetricInfoCollector {
 	mc := &MetricInfoCollector{
 		data:       sync.Map{},
 		waiting:    sync.Map{},
@@ -59,9 +59,11 @@ func InitMetricCollector(configPath string) *MetricInfoCollector {
 		configPath: configPath,
 		//lg:         lg,
 	}
-	go mc.taskDiscovering()
-	go mc.checkTask()
-	go mc.syncTargetInfo()
+	if len(runTask) == 0 || runTask[0] {
+		go mc.taskDiscovering()
+		go mc.checkTask()
+		go mc.syncTargetInfo()
+	}
 	MetricCollector = mc
 	return mc
 }
