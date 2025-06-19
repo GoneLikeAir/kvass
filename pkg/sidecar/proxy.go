@@ -96,7 +96,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	series, err := scrape.StatisticSeries(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs)
+	series, _, err := scrape.StatisticSeries(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs)
 	if err != nil {
 		scrapErr = fmt.Errorf("StatisticSeries failed %v", err)
 		return

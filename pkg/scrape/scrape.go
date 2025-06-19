@@ -132,7 +132,7 @@ func (j *JobInfo) Scrape(url string) ([]byte, string, error) {
 }
 
 // StatisticSeries statistic load from metrics raw data
-func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string, rc []*relabel.Config) (total int64, err error) {
+func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string, rc []*relabel.Config) (total int64, bodySIze int64, err error) {
 	var (
 		p  = textparse.New(b, contentType)
 		et textparse.Entry
@@ -154,7 +154,7 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 				if err == io.EOF {
 					err = nil
 				}
-				return total, err
+				return total, int64(len(b)), err
 			}
 
 			switch et {
@@ -172,7 +172,7 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 				if err == io.EOF {
 					err = nil
 				}
-				return total, err
+				return total, int64(len(b)), err
 			}
 
 			switch et {

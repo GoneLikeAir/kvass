@@ -53,6 +53,7 @@ var cdCfg = struct {
 	shardSelector                string
 	shardPort                    int
 	shardMaxSeries               int64
+	shardMaxBodySize             int64
 	shardMinShard                int32
 	shardMaxShard                int32
 	shardMaxIdleTime             time.Duration
@@ -92,6 +93,8 @@ func init() {
 		"the port of sidecar server")
 	coordinatorCmd.Flags().Int64Var(&cdCfg.shardMaxSeries, "shard.max-series", 1000000,
 		"max series of per shard")
+	coordinatorCmd.Flags().Int64Var(&cdCfg.shardMaxBodySize, "shard.max-body-size", 1024*1024*1024,
+		"max body size of per target")
 	coordinatorCmd.Flags().Int32Var(&cdCfg.shardMaxShard, "shard.max-shard", 999999,
 		"max shard number")
 	coordinatorCmd.Flags().Int32Var(&cdCfg.shardMinShard, "shard.min-shard", 0,
@@ -166,6 +169,7 @@ distribution targets to shards`,
 			cd = coordinator.NewCoordinator(
 				&coordinator.Option{
 					MaxSeries:                    cdCfg.shardMaxSeries,
+					MaxBodySize:                  cdCfg.shardMaxBodySize,
 					MaxShard:                     cdCfg.shardMaxShard,
 					MinShard:                     cdCfg.shardMinShard,
 					MaxIdleTime:                  cdCfg.shardMaxIdleTime,

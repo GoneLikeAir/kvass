@@ -38,6 +38,8 @@ type Option struct {
 	MaxSeries int64
 	// MaxShard is the max number we can scale up to
 	MaxShard int32
+	// MaxBodySize is the max body size of every scrape request
+	MaxBodySize int64
 	// MinShard is the min shard number that coordinator need
 	// Coordinator will change scale to MinShard if current shard number < MinShard
 	MinShard int32

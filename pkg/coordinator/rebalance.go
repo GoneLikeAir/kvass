@@ -308,6 +308,10 @@ func (c *Coordinator) alleviateShard(s *shardInfo, changeAbleShards []*shardInfo
 			c.log.Warnf("too big series [%d] series is [%d], skip alleviate", hash, tar.Series)
 			return 0
 		}
+		if c.option.MaxBodySize > 0 && tar.BodySize > c.option.MaxBodySize {
+			c.log.Warnf("too big body size [%d] series is [%d], skip alleviate", hash, tar.Series)
+			return 0
+		}
 
 		// try transfer target to other shard
 		for _, os := range changeAbleShards {
@@ -370,6 +374,10 @@ func (c *Coordinator) assignNoScrapingTargets(
 
 		if status.Series > c.option.MaxSeries {
 			c.log.Warnf("target too big: %s", tar.ShardTarget.NoParamURL())
+			continue
+		}
+		if c.option.MaxBodySize > 0 && status.BodySize > c.option.MaxBodySize {
+			c.log.Warnf("target body size too big: %s", tar.ShardTarget.NoParamURL())
 			continue
 		}
 

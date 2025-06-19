@@ -98,7 +98,7 @@ metrics0{code="201"} 2
 `
 	r, err := relabel.NewRegexp("200")
 	require.NoError(t, err)
-	s, err := StatisticSeries([]byte(data), "", []*relabel.Config{
+	s, _, rr := StatisticSeries("", nil, []byte(data), "", []*relabel.Config{
 		{
 			SourceLabels: []model.LabelName{"code"},
 			Regex:        r,

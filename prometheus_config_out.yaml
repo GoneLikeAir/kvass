@@ -1,0 +1,402 @@
+global:
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    prometheus: monitoring/k8s
+    prometheus_replica: prometheus-k8s-0
+alerting:
+  alert_relabel_configs:
+  - separator: ;
+    regex: prometheus_replica
+    replacement: $1
+    action: labeldrop
+  alertmanagers:
+  - follow_redirects: true
+    enable_http2: true
+    scheme: http
+    path_prefix: /
+    timeout: 10s
+    api_version: v2
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_name]
+      separator: ;
+      regex: alertmanager-sts-svc
+      replacement: $1
+      action: keep
+    - source_labels: [__meta_kubernetes_endpoint_port_name]
+      separator: ;
+      regex: web
+      replacement: $1
+      action: keep
+    kubernetes_sd_configs:
+    - role: endpoints
+      kubeconfig_file: ""
+      follow_redirects: true
+      enable_http2: true
+      namespaces:
+        names:
+        - masa-prometheus
+rule_files:
+- /etc/prometheus/rules/prometheus-k8s-rulefiles-0/*.yaml
+scrape_configs:
+- job_name: masa-gatekeeper
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /manager/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: masa-meshkeeper
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /manager/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: masa-keeper
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /manager/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: masa-adminserver
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /adminserver/actuator/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: masa-conf
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /nacos/actuator/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: masa-registry
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /nacos/actuator/prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: gns_general_pressure_redis_cluster_datastore
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: ccpd_cs_redis_cluster_cache
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: cfpd_u_redis_cluster_cache
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: PPD_DMZ_REDIS_CLUSTER_CACHE_PROXY
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: ispd_bas_redis_cluster_cache
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: ispd_v_redis_cluster_cache
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: dbpd_rtqs_cloud_redis_cluster_cache
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /prometheus
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: loki_test
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: loki_scrape
+  honor_timestamps: true
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: ISPD_BAS_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: ISPD_V_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: PPD_MGMT_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: CCPD_CS_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: CFPD_U_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: CFPD_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: RPD_GENERAL_REDIS_CLUSTER_CACHE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: GNS_U_3.0_REDIS_CLUSTER_DATASTORE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: GNS_GENERAL_PRESSURE_REDIS_CLUSTER_DATASTORE
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /assemble
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: kvrocks_exporter_targets
+  honor_timestamps: true
+  scrape_interval: 20s
+  scrape_timeout: 10s
+  metrics_path: /scrape
+  scheme: http
+  follow_redirects: true
+  enable_http2: true
+  proxy_url: http://127.0.0.1:8008
+  relabel_configs:
+  - separator: ;
+    regex: __invalid_label_(.+)
+    replacement: $1
+    action: labelmap
+- job_name: prometheus_shards
+  honor_timestamps: false
+  follow_redirects: false
+  enable_http2: false
+  static_configs:
+  - targets:
+    - 10.107.96.42:30909
+    labels:
+      replicate: ""
+      shard: ""

@@ -39,7 +39,9 @@ type ScrapeStatus struct {
 	// ScrapeTimes is the times target scraped by this shard
 	ScrapeTimes uint64 `json:"ScrapeTimes"`
 	// Shards contains ID of shards that is scraping this target
-	Shards     []string `json:"shards"`
+	Shards []string `json:"shards"`
+	// BodySize is the size of body of last scraping
+	BodySize   int64 `json:"bodySize"`
 	lastSeries []int64
 }
 

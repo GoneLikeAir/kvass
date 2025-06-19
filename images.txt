@@ -1,0 +1,4 @@
+quay.io/prometheus/node-exporter:v1.6.0
+quay.io/prometheus-operator/prometheus-config-reloader:v0.66.0
+quay.io/prometheus/prometheus:v2.45.0
+registry.k8s.io/ccr.ccs.tencentyun.com/tkeimages/kube-state-metrics:2.2.4
