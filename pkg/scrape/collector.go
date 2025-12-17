@@ -3,14 +3,15 @@ package scrape
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"go.uber.org/atomic"
 	"io/ioutil"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/pkg/labels"
+	"go.uber.org/atomic"
 )
 
 var MetricCollector *MetricInfoCollector
@@ -31,6 +32,10 @@ type MetricInfoCollector struct {
 	//lg         logrus.FieldLogger
 }
 
+// MetricInfo 存储指标的元数据信息，包括名称、类型、帮助信息、单位、子系统ID和标签等。
+// 该结构体是线程安全的，使用 sync.RWMutex 保护并发访问。
+// 读操作可以并发执行，写操作需要独占访问。
+// 每个 MetricInfo 实例都有自己的锁，采用细粒度锁策略，减少锁竞争。
 type MetricInfo struct {
 	Name         string
 	Type         string
@@ -39,6 +44,9 @@ type MetricInfo struct {
 	SubsystemId  string
 	ExistsLabels map[string]bool
 	Labels       []string
+	// mu 用于保护 MetricInfo 结构体的并发访问
+	// 使用读写锁允许多个读操作并发执行，写操作需要独占访问
+	mu sync.RWMutex
 }
 
 func NewMetricInfo(name string) *MetricInfo {
@@ -267,18 +275,32 @@ func (c *MetricInfoCollector) checkTaskOnce() {
 	ioutil.WriteFile(filename, []byte(fmt.Sprintf("%t", hasTask)), 0644)
 }
 
+// AddHelp 为指定作业和指标添加帮助信息
+// 该方法是线程安全的，使用写锁保护对 MetricInfo.Help 字段的并发访问
 func (c *MetricInfoCollector) AddHelp(jobName, metricName, helpInfo string) {
 	mi := c.loadOrInitMetricInfo(jobName, metricName)
+	mi.mu.Lock()
 	mi.Help = helpInfo
+	mi.mu.Unlock()
 }
 
+// AddUnit 为指定作业和指标添加单位信息
+// 该方法是线程安全的，使用写锁保护对 MetricInfo.Unit 字段的并发访问
 func (c *MetricInfoCollector) AddUnit(jobName, metricName, unit string) {
 	mi := c.loadOrInitMetricInfo(jobName, metricName)
+	mi.mu.Lock()
 	mi.Unit = unit
+	mi.mu.Unlock()
 }
 
+// AddLabels 为指定作业和指标添加标签信息
+// 该方法是线程安全的，使用写锁保护对 MetricInfo.Labels 和 MetricInfo.ExistsLabels 字段的并发访问
+// 会过滤掉已存在的标签和 __name__ 标签
 func (c *MetricInfoCollector) AddLabels(jobName, metricName string, lset labels.Labels) {
 	mi := c.loadOrInitMetricInfo(jobName, metricName)
+	mi.mu.Lock()
+	defer mi.mu.Unlock()
+
 	for _, l := range lset {
 		if l.Name == "__name__" {
 			continue
@@ -291,14 +313,22 @@ func (c *MetricInfoCollector) AddLabels(jobName, metricName string, lset labels.
 	}
 }
 
+// AddSubsystemInfo 为指定作业和指标添加子系统信息
+// 该方法是线程安全的，使用写锁保护对 MetricInfo.SubsystemId 字段的并发访问
 func (c *MetricInfoCollector) AddSubsystemInfo(jobName, metricName string, subsystemId string) {
 	mi := c.loadOrInitMetricInfo(jobName, metricName)
+	mi.mu.Lock()
 	mi.SubsystemId = subsystemId
+	mi.mu.Unlock()
 }
 
+// AddType 为指定作业和指标添加类型信息
+// 该方法是线程安全的，使用写锁保护对 MetricInfo.Type 字段的并发访问
 func (c *MetricInfoCollector) AddType(jobName, metricName, mType string) {
 	mi := c.loadOrInitMetricInfo(jobName, metricName)
+	mi.mu.Lock()
 	mi.Type = mType
+	mi.mu.Unlock()
 }
 
 func (c *MetricInfoCollector) loadOrInitJobData(jobName string) *sync.Map {
@@ -323,6 +353,10 @@ func (c *MetricInfoCollector) loadOrInitMetricInfo(jobName, metricName string) *
 	}
 }
 
+// dumpJobMetrics 将指定作业的指标信息导出到文件
+// 该方法是线程安全的，使用读锁保护对 MetricInfo 各字段的并发访问
+// 导出完成后会从内存中删除该作业的数据
+// 导出格式为：子系统ID|指标名称|类型|单位|帮助信息|标签列表
 func (c *MetricInfoCollector) dumpJobMetrics(jobName string) error {
 	var rows []string
 	data := c.loadOrInitJobData(jobName)
@@ -330,8 +364,10 @@ func (c *MetricInfoCollector) dumpJobMetrics(jobName string) error {
 	data.Range(func(key, value interface{}) bool {
 		//metricName := key.(string)
 		mi := value.(*MetricInfo)
+		mi.mu.RLock()
 		//rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s |", mi.Name, mi.Type, mi.Unit, mi.Help, strings.Join(mi.Labels, ",")))
 		rows = append(rows, fmt.Sprintf("%s|%s|%s|%s|%s|%s", mi.SubsystemId, mi.Name, mi.Type, mi.Unit, mi.Help, strings.Join(mi.Labels, ",")))
+		mi.mu.RUnlock()
 		return true
 	})
 	//header := "| Name | Type | Unit | Help | Labels |"

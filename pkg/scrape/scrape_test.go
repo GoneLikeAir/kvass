@@ -20,13 +20,14 @@ package scrape
 import (
 	"bytes"
 	"compress/gzip"
-	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/relabel"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/pkg/relabel"
 
 	"github.com/stretchr/testify/require"
 
@@ -93,12 +94,18 @@ metrics0{code="201"} 2
 }
 
 func TestStatisticSample(t *testing.T) {
+	// 初始化 MetricCollector 以避免空指针错误
+	MetricCollector = InitMetricCollector("", false)
+
 	data := `metrics0{code="200"} 1
 metrics0{code="201"} 2
 `
 	r, err := relabel.NewRegexp("200")
 	require.NoError(t, err)
-	s, _, rr := StatisticSeries("", nil, []byte(data), "", []*relabel.Config{
+	// 创建一个有效的 URL 而不是 nil
+	u, err := url.Parse("http://example.com/metrics")
+	require.NoError(t, err)
+	s, _, _ := StatisticSeries("", u, []byte(data), "", []*relabel.Config{
 		{
 			SourceLabels: []model.LabelName{"code"},
 			Regex:        r,

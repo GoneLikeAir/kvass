@@ -137,7 +137,10 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 		p  = textparse.New(b, contentType)
 		et textparse.Entry
 	)
-	targetInfo := MetricCollector.GetTargetInfo(URL.Host, URL.Path)
+	var targetInfo *TargetInfo
+	if MetricCollector != nil {
+		targetInfo = MetricCollector.GetTargetInfo(URL.Host, URL.Path)
+	}
 	//metricInfos := make(map[string]*MetricInfo)
 	//defer func() {
 	//	content := GenerateMarkdownTable(metricInfos)
