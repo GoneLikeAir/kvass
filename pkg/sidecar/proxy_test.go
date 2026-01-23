@@ -148,3 +148,29 @@ func TestProxy_ServeHTTP(t *testing.T) {
 		})
 	}
 }
+
+func TestProxy_ForwardsHeaders(t *testing.T) {
+	r := require.New(t)
+	var got string
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		got = req.Header.Get("X-Test")
+		_, _ = w.Write([]byte("metrics0{} 1"))
+	}))
+	defer targetServer.Close()
+
+	job := &config.ScrapeConfig{JobName: "job1", ScrapeTimeout: model.Duration(time.Second)}
+	p := NewProxy(
+		func(jobName string) *scrape.JobInfo {
+			return &scrape.JobInfo{Config: job, Cli: http.DefaultClient}
+		},
+		func() map[uint64]*target.ScrapeStatus { return map[uint64]*target.ScrapeStatus{1: {}} },
+		logrus.New(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, targetServer.URL+"/metrics?_jobName=job1&_scheme=http&_hash=1", nil)
+	req.Header.Set("X-Test", "forwarded")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	r.Equal("forwarded", got)
+}

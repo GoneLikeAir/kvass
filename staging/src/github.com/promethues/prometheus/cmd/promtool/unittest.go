@@ -15,38 +15,56 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-kit/log"
-	"github.com/pkg/errors"
-	"github.com/prometheus/common/model"
-	yaml "gopkg.in/yaml.v2"
+	"github.com/google/go-cmp/cmp"
+	"github.com/grafana/regexp"
+	"github.com/nsf/jsondiff"
+	"gopkg.in/yaml.v2"
 
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/common/model"
+
+	"github.com/prometheus/prometheus/model/histogram"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/prometheus/prometheus/promql/promqltest"
 	"github.com/prometheus/prometheus/rules"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/util/junitxml"
 )
 
 // RulesUnitTest does unit testing of rules based on the unit testing files provided.
 // More info about the file format can be found in the docs.
-func RulesUnitTest(files ...string) int {
+func RulesUnitTest(queryOpts promqltest.LazyLoaderOpts, runStrings []string, diffFlag bool, files ...string) int {
+	return RulesUnitTestResult(io.Discard, queryOpts, runStrings, diffFlag, files...)
+}
+
+func RulesUnitTestResult(results io.Writer, queryOpts promqltest.LazyLoaderOpts, runStrings []string, diffFlag bool, files ...string) int {
 	failed := false
+	junit := &junitxml.JUnitXML{}
+
+	var run *regexp.Regexp
+	if runStrings != nil {
+		run = regexp.MustCompile(strings.Join(runStrings, "|"))
+	}
 
 	for _, f := range files {
-		if errs := ruleUnitTest(f); errs != nil {
+		if errs := ruleUnitTest(f, queryOpts, run, diffFlag, junit.Suite(f)); errs != nil {
 			fmt.Fprintln(os.Stderr, "  FAILED:")
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e.Error())
+				fmt.Println()
 			}
 			failed = true
 		} else {
@@ -54,25 +72,30 @@ func RulesUnitTest(files ...string) int {
 		}
 		fmt.Println()
 	}
-	if failed {
-		return 1
+	err := junit.WriteXML(results)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write JUnit XML: %s\n", err)
 	}
-	return 0
+	if failed {
+		return failureExitCode
+	}
+	return successExitCode
 }
 
-func ruleUnitTest(filename string) []error {
-	fmt.Println("Unit Testing: ", filename)
-
-	b, err := ioutil.ReadFile(filename)
+func ruleUnitTest(filename string, queryOpts promqltest.LazyLoaderOpts, run *regexp.Regexp, diffFlag bool, ts *junitxml.TestSuite) []error {
+	b, err := os.ReadFile(filename)
 	if err != nil {
+		ts.Abort(err)
 		return []error{err}
 	}
 
 	var unitTestInp unitTestFile
 	if err := yaml.UnmarshalStrict(b, &unitTestInp); err != nil {
+		ts.Abort(err)
 		return []error{err}
 	}
 	if err := resolveAndGlobFilepaths(filepath.Dir(filename), &unitTestInp); err != nil {
+		ts.Abort(err)
 		return []error{err}
 	}
 
@@ -81,22 +104,38 @@ func ruleUnitTest(filename string) []error {
 	}
 
 	evalInterval := time.Duration(unitTestInp.EvaluationInterval)
-
+	ts.Settime(time.Now().Format("2006-01-02T15:04:05"))
 	// Giving number for groups mentioned in the file for ordering.
 	// Lower number group should be evaluated before higher number group.
 	groupOrderMap := make(map[string]int)
 	for i, gn := range unitTestInp.GroupEvalOrder {
 		if _, ok := groupOrderMap[gn]; ok {
-			return []error{errors.Errorf("group name repeated in evaluation order: %s", gn)}
+			err := fmt.Errorf("group name repeated in evaluation order: %s", gn)
+			ts.Abort(err)
+			return []error{err}
 		}
 		groupOrderMap[gn] = i
 	}
 
 	// Testing.
 	var errs []error
-	for _, t := range unitTestInp.Tests {
-		ers := t.test(evalInterval, groupOrderMap, unitTestInp.RuleFiles...)
+	for i, t := range unitTestInp.Tests {
+		if !matchesRun(t.TestGroupName, run) {
+			continue
+		}
+		testname := t.TestGroupName
+		if testname == "" {
+			testname = fmt.Sprintf("unnamed#%d", i)
+		}
+		tc := ts.Case(testname)
+		if t.Interval == 0 {
+			t.Interval = unitTestInp.EvaluationInterval
+		}
+		ers := t.test(evalInterval, groupOrderMap, queryOpts, diffFlag, unitTestInp.RuleFiles...)
 		if ers != nil {
+			for _, e := range ers {
+				tc.Fail(e.Error())
+			}
 			errs = append(errs, ers...)
 		}
 	}
@@ -105,6 +144,14 @@ func ruleUnitTest(filename string) []error {
 		return errs
 	}
 	return nil
+}
+
+func matchesRun(name string, run *regexp.Regexp) bool {
+	if run == nil {
+		return true
+	}
+
+	return run.MatchString(name)
 }
 
 // unitTestFile holds the contents of a single unit test file.
@@ -130,7 +177,7 @@ func resolveAndGlobFilepaths(baseDir string, utf *unitTestFile) error {
 		if err != nil {
 			return err
 		}
-		if len(m) <= 0 {
+		if len(m) == 0 {
 			fmt.Fprintln(os.Stderr, "  WARNING: no file match pattern", rf)
 		}
 		globbedFiles = append(globbedFiles, m...)
@@ -151,13 +198,18 @@ type testGroup struct {
 }
 
 // test performs the unit tests.
-func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]int, ruleFiles ...string) []error {
+func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]int, queryOpts promqltest.LazyLoaderOpts, diffFlag bool, ruleFiles ...string) (outErr []error) {
 	// Setup testing suite.
-	suite, err := promql.NewLazyLoader(nil, tg.seriesLoadingString())
+	suite, err := promqltest.NewLazyLoader(tg.seriesLoadingString(), queryOpts)
 	if err != nil {
 		return []error{err}
 	}
-	defer suite.Close()
+	defer func() {
+		err := suite.Close()
+		if err != nil {
+			outErr = append(outErr, err)
+		}
+	}()
 	suite.SubqueryInterval = evalInterval
 
 	// Load the rule files.
@@ -169,7 +221,7 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 		Logger:     log.NewNopLogger(),
 	}
 	m := rules.NewManager(opts)
-	groupsMap, ers := m.LoadGroups(time.Duration(tg.Interval), tg.ExternalLabels, tg.ExternalURL, ruleFiles...)
+	groupsMap, ers := m.LoadGroups(time.Duration(tg.Interval), tg.ExternalLabels, tg.ExternalURL, nil, ruleFiles...)
 	if ers != nil {
 		return ers
 	}
@@ -195,7 +247,7 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 			if tg.TestGroupName != "" {
 				testGroupLog = fmt.Sprintf(" (in TestGroup %s)", tg.TestGroupName)
 			}
-			return []error{errors.Errorf("an item under alert_rule_test misses required attribute alertname at eval_time %v%s", alert.EvalTime, testGroupLog)}
+			return []error{fmt.Errorf("an item under alert_rule_test misses required attribute alertname at eval_time %v%s", alert.EvalTime, testGroupLog)}
 		}
 		alertEvalTimesMap[alert.EvalTime] = struct{}{}
 
@@ -240,7 +292,7 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 				g.Eval(suite.Context(), ts)
 				for _, r := range g.Rules() {
 					if r.LastError() != nil {
-						evalErrs = append(evalErrs, errors.Errorf("    rule: %s, time: %s, err: %v",
+						evalErrs = append(evalErrs, fmt.Errorf("    rule: %s, time: %s, err: %w",
 							r.Name(), ts.Sub(time.Unix(0, 0).UTC()), r.LastError()))
 					}
 				}
@@ -255,7 +307,7 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 
 		for {
 			if !(curr < len(alertEvalTimes) && ts.Sub(mint) <= time.Duration(alertEvalTimes[curr]) &&
-				time.Duration(alertEvalTimes[curr]) < ts.Add(time.Duration(evalInterval)).Sub(mint)) {
+				time.Duration(alertEvalTimes[curr]) < ts.Add(evalInterval).Sub(mint)) {
 				break
 			}
 
@@ -284,8 +336,8 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 					for _, a := range ar.ActiveAlerts() {
 						if a.State == rules.StateFiring {
 							alerts = append(alerts, labelAndAnnotation{
-								Labels:      append(labels.Labels{}, a.Labels...),
-								Annotations: append(labels.Labels{}, a.Annotations...),
+								Labels:      a.Labels.Copy(),
+								Annotations: a.Annotations.Copy(),
 							})
 						}
 					}
@@ -313,29 +365,53 @@ func (tg *testGroup) test(evalInterval time.Duration, groupOrderMap map[string]i
 					})
 				}
 
-				var sb strings.Builder
-				if gotAlerts.Len() != expAlerts.Len() {
+				sort.Sort(gotAlerts)
+				sort.Sort(expAlerts)
+
+				if !cmp.Equal(expAlerts, gotAlerts, cmp.Comparer(labels.Equal)) {
+					var testName string
 					if tg.TestGroupName != "" {
-						fmt.Fprintf(&sb, "    name: %s,\n", tg.TestGroupName)
+						testName = fmt.Sprintf("    name: %s,\n", tg.TestGroupName)
 					}
-					fmt.Fprintf(&sb, "    alertname:%s, time:%s, \n", testcase.Alertname, testcase.EvalTime.String())
-					fmt.Fprintf(&sb, "        exp:%#v, \n", expAlerts.String())
-					fmt.Fprintf(&sb, "        got:%#v", gotAlerts.String())
-
-					errs = append(errs, errors.New(sb.String()))
-				} else {
-					sort.Sort(gotAlerts)
-					sort.Sort(expAlerts)
-
-					if !reflect.DeepEqual(expAlerts, gotAlerts) {
-						if tg.TestGroupName != "" {
-							fmt.Fprintf(&sb, "    name: %s,\n", tg.TestGroupName)
+					expString := indentLines(expAlerts.String(), "            ")
+					gotString := indentLines(gotAlerts.String(), "            ")
+					if diffFlag {
+						// If empty, populates an empty value
+						if gotAlerts.Len() == 0 {
+							gotAlerts = append(gotAlerts, labelAndAnnotation{
+								Labels:      labels.Labels{},
+								Annotations: labels.Labels{},
+							})
 						}
-						fmt.Fprintf(&sb, "    alertname:%s, time:%s, \n", testcase.Alertname, testcase.EvalTime.String())
-						fmt.Fprintf(&sb, "        exp:%#v, \n", expAlerts.String())
-						fmt.Fprintf(&sb, "        got:%#v", gotAlerts.String())
+						// If empty, populates an empty value
+						if expAlerts.Len() == 0 {
+							expAlerts = append(expAlerts, labelAndAnnotation{
+								Labels:      labels.Labels{},
+								Annotations: labels.Labels{},
+							})
+						}
 
-						errs = append(errs, errors.New(sb.String()))
+						diffOpts := jsondiff.DefaultConsoleOptions()
+						expAlertsJSON, err := json.Marshal(expAlerts)
+						if err != nil {
+							errs = append(errs, fmt.Errorf("error marshaling expected %s alert: [%s]", tg.TestGroupName, err.Error()))
+							continue
+						}
+
+						gotAlertsJSON, err := json.Marshal(gotAlerts)
+						if err != nil {
+							errs = append(errs, fmt.Errorf("error marshaling received %s alert: [%s]", tg.TestGroupName, err.Error()))
+							continue
+						}
+
+						res, diff := jsondiff.Compare(expAlertsJSON, gotAlertsJSON, &diffOpts)
+						if res != jsondiff.FullMatch {
+							errs = append(errs, fmt.Errorf("%s    alertname: %s, time: %s, \n        diff: %v",
+								testName, testcase.Alertname, testcase.EvalTime.String(), indentLines(diff, "            ")))
+						}
+					} else {
+						errs = append(errs, fmt.Errorf("%s    alertname: %s, time: %s, \n        exp:%v, \n        got:%v",
+							testName, testcase.Alertname, testcase.EvalTime.String(), expString, gotString))
 					}
 				}
 			}
@@ -350,7 +426,7 @@ Outer:
 		got, err := query(suite.Context(), testCase.Expr, mint.Add(time.Duration(testCase.EvalTime)),
 			suite.QueryEngine(), suite.Queryable())
 		if err != nil {
-			errs = append(errs, errors.Errorf("    expr: %q, time: %s, err: %s", testCase.Expr,
+			errs = append(errs, fmt.Errorf("    expr: %q, time: %s, err: %s", testCase.Expr,
 				testCase.EvalTime.String(), err.Error()))
 			continue
 		}
@@ -358,23 +434,39 @@ Outer:
 		var gotSamples []parsedSample
 		for _, s := range got {
 			gotSamples = append(gotSamples, parsedSample{
-				Labels: s.Metric.Copy(),
-				Value:  s.V,
+				Labels:    s.Metric.Copy(),
+				Value:     s.F,
+				Histogram: promqltest.HistogramTestExpression(s.H),
 			})
 		}
 
 		var expSamples []parsedSample
 		for _, s := range testCase.ExpSamples {
 			lb, err := parser.ParseMetric(s.Labels)
+			var hist *histogram.FloatHistogram
+			if err == nil && s.Histogram != "" {
+				_, values, parseErr := parser.ParseSeriesDesc("{} " + s.Histogram)
+				switch {
+				case parseErr != nil:
+					err = parseErr
+				case len(values) != 1:
+					err = fmt.Errorf("expected 1 value, got %d", len(values))
+				case values[0].Histogram == nil:
+					err = fmt.Errorf("expected histogram, got %v", values[0])
+				default:
+					hist = values[0].Histogram
+				}
+			}
 			if err != nil {
-				err = errors.Wrapf(err, "labels %q", s.Labels)
-				errs = append(errs, errors.Errorf("    expr: %q, time: %s, err: %s", testCase.Expr,
-					testCase.EvalTime.String(), err.Error()))
+				err = fmt.Errorf("labels %q: %w", s.Labels, err)
+				errs = append(errs, fmt.Errorf("    expr: %q, time: %s, err: %w", testCase.Expr,
+					testCase.EvalTime.String(), err))
 				continue Outer
 			}
 			expSamples = append(expSamples, parsedSample{
-				Labels: lb,
-				Value:  s.Value,
+				Labels:    lb,
+				Value:     s.Value,
+				Histogram: promqltest.HistogramTestExpression(hist),
 			})
 		}
 
@@ -384,8 +476,8 @@ Outer:
 		sort.Slice(gotSamples, func(i, j int) bool {
 			return labels.Compare(gotSamples[i].Labels, gotSamples[j].Labels) <= 0
 		})
-		if !reflect.DeepEqual(expSamples, gotSamples) {
-			errs = append(errs, errors.Errorf("    expr: %q, time: %s,\n        exp:%#v\n        got:%#v", testCase.Expr,
+		if !cmp.Equal(expSamples, gotSamples, cmp.Comparer(labels.Equal)) {
+			errs = append(errs, fmt.Errorf("    expr: %q, time: %s,\n        exp: %v\n        got: %v", testCase.Expr,
 				testCase.EvalTime.String(), parsedSamplesString(expSamples), parsedSamplesString(gotSamples)))
 		}
 	}
@@ -398,7 +490,6 @@ Outer:
 
 // seriesLoadingString returns the input series in PromQL notation.
 func (tg *testGroup) seriesLoadingString() string {
-
 	result := fmt.Sprintf("load %v\n", shortDuration(tg.Interval))
 	for _, is := range tg.InputSeries {
 		result += fmt.Sprintf("  %v %v\n", is.Series, is.Values)
@@ -447,7 +538,7 @@ func (tg *testGroup) maxEvalTime() time.Duration {
 }
 
 func query(ctx context.Context, qs string, t time.Time, engine *promql.Engine, qu storage.Queryable) (promql.Vector, error) {
-	q, err := engine.NewInstantQuery(qu, qs, t)
+	q, err := engine.NewInstantQuery(ctx, qu, nil, qs, t)
 	if err != nil {
 		return nil, err
 	}
@@ -460,12 +551,30 @@ func query(ctx context.Context, qs string, t time.Time, engine *promql.Engine, q
 		return v, nil
 	case promql.Scalar:
 		return promql.Vector{promql.Sample{
-			Point:  promql.Point(v),
+			T:      v.T,
+			F:      v.V,
 			Metric: labels.Labels{},
 		}}, nil
 	default:
 		return nil, errors.New("rule result is not a vector or scalar")
 	}
+}
+
+// indentLines prefixes each line in the supplied string with the given "indent"
+// string.
+func indentLines(lines, indent string) string {
+	sb := strings.Builder{}
+	n := strings.Split(lines, "\n")
+	for i, l := range n {
+		if i > 0 {
+			sb.WriteString(indent)
+		}
+		sb.WriteString(l)
+		if i != len(n)-1 {
+			sb.WriteRune('\n')
+		}
+	}
+	return sb.String()
 }
 
 type labelsAndAnnotations []labelAndAnnotation
@@ -484,11 +593,11 @@ func (la labelsAndAnnotations) String() string {
 	if len(la) == 0 {
 		return "[]"
 	}
-	s := "[" + la[0].String()
-	for _, l := range la[1:] {
-		s += ", " + l.String()
+	s := "[\n0:" + indentLines("\n"+la[0].String(), "  ")
+	for i, l := range la[1:] {
+		s += ",\n" + strconv.Itoa(i+1) + ":" + indentLines("\n"+l.String(), "  ")
 	}
-	s += "]"
+	s += "\n]"
 
 	return s
 }
@@ -499,7 +608,7 @@ type labelAndAnnotation struct {
 }
 
 func (la *labelAndAnnotation) String() string {
-	return "Labels:" + la.Labels.String() + " Annotations:" + la.Annotations.String()
+	return "Labels:" + la.Labels.String() + "\nAnnotations:" + la.Annotations.String()
 }
 
 type series struct {
@@ -525,14 +634,16 @@ type promqlTestCase struct {
 }
 
 type sample struct {
-	Labels string  `yaml:"labels"`
-	Value  float64 `yaml:"value"`
+	Labels    string  `yaml:"labels"`
+	Value     float64 `yaml:"value"`
+	Histogram string  `yaml:"histogram"` // A non-empty string means Value is ignored.
 }
 
 // parsedSample is a sample with parsed Labels.
 type parsedSample struct {
-	Labels labels.Labels
-	Value  float64
+	Labels    labels.Labels
+	Value     float64
+	Histogram string // TestExpression() of histogram.FloatHistogram
 }
 
 func parsedSamplesString(pss []parsedSample) string {
@@ -547,5 +658,8 @@ func parsedSamplesString(pss []parsedSample) string {
 }
 
 func (ps *parsedSample) String() string {
+	if ps.Histogram != "" {
+		return ps.Labels.String() + " " + ps.Histogram
+	}
 	return ps.Labels.String() + " " + strconv.FormatFloat(ps.Value, 'E', -1, 64)
 }

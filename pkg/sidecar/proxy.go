@@ -90,7 +90,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}
 	}()
-	data, contentType, err := jobInfo.Scrape(realURL.String())
+	data, contentType, err := jobInfo.Scrape(realURL.String(), r.Header)
 	if err != nil {
 		scrapErr = fmt.Errorf("get data %v", err)
 		return

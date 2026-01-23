@@ -9,12 +9,12 @@ import (
 	"strings"
 	"tkestack.io/kvass/pkg/target"
 
-	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/model/relabel"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/model/labels"
 
 	"tkestack.io/kvass/pkg/utils/types"
 
@@ -76,10 +76,11 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 	}
 
 	preRelabelLabels := lb.Labels()
-	lset = relabel.Process(preRelabelLabels, cfg.RelabelConfigs...)
+	var keep bool
+	lset, keep = relabel.Process(preRelabelLabels, cfg.RelabelConfigs...)
 
 	// Get if the target was dropped.
-	if lset == nil {
+	if !keep {
 		return nil, preRelabelLabels, nil
 	}
 	if v := lset.Get(model.AddressLabel); v == "" {

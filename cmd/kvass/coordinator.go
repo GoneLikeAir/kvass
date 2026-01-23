@@ -20,7 +20,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/go-kit/kit/log"
+	"github.com/go-kit/log"
+	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/prometheus/config"
@@ -61,6 +62,7 @@ var cdCfg = struct {
 	exploreMaxCon                int
 	webAddress                   string
 	configFile                   string
+	httpHeadersBaseDir           string
 	syncInterval                 time.Duration
 	sdInitTimeout                time.Duration
 	configInject                 configInjectOption
@@ -110,6 +112,8 @@ func init() {
 		"server bind address")
 	coordinatorCmd.Flags().StringVar(&cdCfg.configFile, "config.file", "prometheus.yml",
 		"config file path")
+	coordinatorCmd.Flags().StringVar(&cdCfg.httpHeadersBaseDir, "http-headers.base-dir", "/etc/prometheus/headers",
+		"base directory for http_headers files when loading config without a file path")
 	coordinatorCmd.Flags().DurationVar(&cdCfg.syncInterval, "coordinator.interval", time.Second*10,
 		"the interval of coordinator loop")
 	coordinatorCmd.Flags().DurationVar(&cdCfg.sdInitTimeout, "sd.init-timeout", time.Minute*1,
@@ -159,9 +163,10 @@ distribution targets to shards`,
 				Level:  level,
 				Format: format,
 			})
+			sdRegistry             = prometheus.NewRegistry()
+			discoveryManagerScrape *prom_discovery.Manager
 			_                      = scrape.InitMetricCollector(sidecarCfg.configFile, false)
 			scrapeManager          = scrape.New(lg.WithField("component", "scrape discovery"))
-			discoveryManagerScrape = prom_discovery.NewManager(context.Background(), log.With(logger, "component", "discovery manager scrape"), prom_discovery.Name("scrape"))
 			targetDiscovery        = discovery.New(lg.WithField("component", "target discovery"))
 			exp                    = explore.New(scrapeManager, lg.WithField("component", "explore"))
 			cfgManager             = prom.NewConfigManager()
@@ -184,6 +189,18 @@ distribution targets to shards`,
 				targetDiscovery.ActiveTargetsByHash,
 				lg.WithField("component", "coordinator"))
 		)
+		sdMetrics, err := prom_discovery.CreateAndRegisterSDMetrics(sdRegistry)
+		if err != nil {
+			return err
+		}
+		discoveryManagerScrape = prom_discovery.NewManager(
+			context.Background(),
+			log.With(logger, "component", "discovery manager scrape"),
+			sdRegistry,
+			sdMetrics,
+			prom_discovery.Name("scrape"),
+		)
+		cfgManager.SetHTTPHeadersBaseDir(cdCfg.httpHeadersBaseDir)
 
 		cfgManager.AddReloadCallbacks(
 			func(cfg *prom.ConfigInfo) error {

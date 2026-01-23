@@ -77,7 +77,11 @@ func NewService(
 		return api.Data(nil)
 	}))
 	s.ginEngine.GET("/api/v1/status/config/", api.Wrap(lg, func(ctx *gin.Context) *api.Result {
-		return api.Data(gin.H{"yaml": string(s.cfgManager.ConfigInfo().RawContent)})
+		redacted, err := prom.RedactHTTPHeadersSecrets(s.cfgManager.ConfigInfo().RawContent)
+		if err != nil {
+			return api.InternalErr(err, "redact config")
+		}
+		return api.Data(gin.H{"yaml": string(redacted)})
 	}))
 	s.ginEngine.POST(s.path("/api/v1/status/config/"), api.Wrap(lg, s.updateConfig))
 

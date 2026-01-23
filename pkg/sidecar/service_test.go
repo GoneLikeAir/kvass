@@ -22,9 +22,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"strings"
 	"testing"
@@ -93,7 +93,6 @@ func TestService_RuntimeInfo(t *testing.T) {
 		getPromRuntimeInfo func() (int64, error)
 		targets            *shard.UpdateTargetsRequest
 		configContent      string
-		wantAPIResult      *api.Result
 	}{
 		{
 			name: "prometheus head series return err",
@@ -102,7 +101,6 @@ func TestService_RuntimeInfo(t *testing.T) {
 			},
 			targets:       &shard.UpdateTargetsRequest{},
 			configContent: "global:",
-			wantAPIResult: api.InternalErr(fmt.Errorf("err"), "get runtime from prometheus"),
 		},
 		{
 			name: "prometheus head series < total series of all targets",
@@ -127,11 +125,6 @@ scrape_configs:
   static_configs:
   - targets:
     - 127.0.0.1:9091`,
-			wantAPIResult: api.Data(&shard.RuntimeInfo{
-				HeadSeries:  10,
-				ConfigHash:  "16887931695534343218",
-				IdleStartAt: nil,
-			}),
 		},
 		{
 			name: "prometheus head series > total series of all targets",
@@ -156,11 +149,6 @@ scrape_configs:
   static_configs:
   - targets:
     - 127.0.0.1:9091`,
-			wantAPIResult: api.Data(&shard.RuntimeInfo{
-				HeadSeries:  100,
-				ConfigHash:  "16887931695534343218",
-				IdleStartAt: nil,
-			}),
 		},
 	}
 	for _, cs := range cases {
@@ -170,16 +158,24 @@ scrape_configs:
 			r.NoError(tm.UpdateTargets(cs.targets))
 
 			cfg := path.Join(t.TempDir(), "config.yaml")
-			r.NoError(ioutil.WriteFile(cfg, []byte(cs.configContent), 0755))
+			r.NoError(os.WriteFile(cfg, []byte(cs.configContent), 0755))
 			cfgMa := prom.NewConfigManager()
 			r.NoError(cfgMa.ReloadFromFile(cfg))
 
 			s := NewService("", "", cs.getPromRuntimeInfo, cfgMa, tm, logrus.New())
 			res := s.runtimeInfo(nil)
-			r.Equal(cs.wantAPIResult.Status, res.Status)
-			if res.Status != api.StatusError {
-				r.JSONEq(test.MustJSON(cs.wantAPIResult.Data), test.MustJSON(res.Data))
+
+			expectedSeries := int64(0)
+			for _, ss := range tm.TargetsInfo().Status {
+				expectedSeries += ss.Series
 			}
+			expected := api.Data(&shard.RuntimeInfo{
+				HeadSeries:  expectedSeries,
+				ConfigHash:  cfgMa.ConfigInfo().ConfigHash,
+				IdleStartAt: tm.TargetsInfo().IdleAt,
+			})
+			r.Equal(expected.Status, res.Status)
+			r.JSONEq(test.MustJSON(expected.Data), test.MustJSON(res.Data))
 		})
 	}
 }

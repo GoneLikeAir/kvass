@@ -19,7 +19,7 @@ package coordinator
 
 import (
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/sirupsen/logrus"
 	"net/http"

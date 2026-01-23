@@ -15,14 +15,13 @@ package hetzner
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-kit/log"
-	"github.com/hetznercloud/hcloud-go/hcloud"
+	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
@@ -47,6 +46,7 @@ const (
 	hetznerLabelHcloudDiskGB                        = hetznerHcloudLabelPrefix + "disk_size_gb"
 	hetznerLabelHcloudType                          = hetznerHcloudLabelPrefix + "server_type"
 	hetznerLabelHcloudLabel                         = hetznerHcloudLabelPrefix + "label_"
+	hetznerLabelHcloudLabelPresent                  = hetznerHcloudLabelPrefix + "labelpresent_"
 )
 
 // Discovery periodically performs Hetzner Cloud requests. It implements
@@ -58,12 +58,12 @@ type hcloudDiscovery struct {
 }
 
 // newHcloudDiscovery returns a new hcloudDiscovery which periodically refreshes its targets.
-func newHcloudDiscovery(conf *SDConfig, logger log.Logger) (*hcloudDiscovery, error) {
+func newHcloudDiscovery(conf *SDConfig, _ log.Logger) (*hcloudDiscovery, error) {
 	d := &hcloudDiscovery{
 		port: conf.Port,
 	}
 
-	rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "hetzner_sd", config.WithHTTP2Disabled())
+	rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "hetzner_sd")
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +77,7 @@ func newHcloudDiscovery(conf *SDConfig, logger log.Logger) (*hcloudDiscovery, er
 	)
 	return d, nil
 }
+
 func (d *hcloudDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
 	servers, err := d.client.Server.All(ctx)
 	if err != nil {
@@ -89,8 +90,8 @@ func (d *hcloudDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 	targets := make([]model.LabelSet, len(servers))
 	for i, server := range servers {
 		labels := model.LabelSet{
-			hetznerLabelRole:              model.LabelValue(hetznerRoleHcloud),
-			hetznerLabelServerID:          model.LabelValue(fmt.Sprintf("%d", server.ID)),
+			hetznerLabelRole:              model.LabelValue(HetznerRoleHcloud),
+			hetznerLabelServerID:          model.LabelValue(strconv.FormatInt(server.ID, 10)),
 			hetznerLabelServerName:        model.LabelValue(server.Name),
 			hetznerLabelDatacenter:        model.LabelValue(server.Datacenter.Name),
 			hetznerLabelPublicIPv4:        model.LabelValue(server.PublicNet.IPv4.IP.String()),
@@ -100,10 +101,10 @@ func (d *hcloudDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 			hetznerLabelHcloudDatacenterLocation:            model.LabelValue(server.Datacenter.Location.Name),
 			hetznerLabelHcloudDatacenterLocationNetworkZone: model.LabelValue(server.Datacenter.Location.NetworkZone),
 			hetznerLabelHcloudType:                          model.LabelValue(server.ServerType.Name),
-			hetznerLabelHcloudCPUCores:                      model.LabelValue(fmt.Sprintf("%d", server.ServerType.Cores)),
+			hetznerLabelHcloudCPUCores:                      model.LabelValue(strconv.Itoa(server.ServerType.Cores)),
 			hetznerLabelHcloudCPUType:                       model.LabelValue(server.ServerType.CPUType),
-			hetznerLabelHcloudMemoryGB:                      model.LabelValue(fmt.Sprintf("%d", int(server.ServerType.Memory))),
-			hetznerLabelHcloudDiskGB:                        model.LabelValue(fmt.Sprintf("%d", server.ServerType.Disk)),
+			hetznerLabelHcloudMemoryGB:                      model.LabelValue(strconv.Itoa(int(server.ServerType.Memory))),
+			hetznerLabelHcloudDiskGB:                        model.LabelValue(strconv.Itoa(server.ServerType.Disk)),
 
 			model.AddressLabel: model.LabelValue(net.JoinHostPort(server.PublicNet.IPv4.IP.String(), strconv.FormatUint(uint64(d.port), 10))),
 		}
@@ -124,6 +125,9 @@ func (d *hcloudDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 			}
 		}
 		for labelKey, labelValue := range server.Labels {
+			presentLabel := model.LabelName(hetznerLabelHcloudLabelPresent + strutil.SanitizeLabelName(labelKey))
+			labels[presentLabel] = model.LabelValue("true")
+
 			label := model.LabelName(hetznerLabelHcloudLabel + strutil.SanitizeLabelName(labelKey))
 			labels[label] = model.LabelValue(labelValue)
 		}

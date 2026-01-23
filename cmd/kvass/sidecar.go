@@ -19,6 +19,7 @@ package main
 
 import (
 	"path"
+	"path/filepath"
 	"tkestack.io/kvass/pkg/scrape"
 	"tkestack.io/kvass/pkg/sidecar"
 	"tkestack.io/kvass/pkg/target"
@@ -32,14 +33,15 @@ import (
 )
 
 var sidecarCfg = struct {
-	configFile     string
-	configOutFile  string
-	proxyAddress   string
-	apiAddress     string
-	prometheusURL  string
-	storePath      string
-	injectProxyURL string
-	configInject   configInjectOption
+	configFile         string
+	configOutFile      string
+	httpHeadersBaseDir string
+	proxyAddress       string
+	apiAddress         string
+	prometheusURL      string
+	storePath          string
+	injectProxyURL     string
+	configInject       configInjectOption
 }{}
 
 func init() {
@@ -53,6 +55,8 @@ func init() {
 		"origin config file, set this empty to enable POST /api/v1/status/config to update config")
 	sidecarCmd.Flags().StringVar(&sidecarCfg.configOutFile, "config.output-file", "/etc/prometheus/config_out/prometheus_injected.yaml",
 		"injected config file")
+	sidecarCmd.Flags().StringVar(&sidecarCfg.httpHeadersBaseDir, "http-headers.base-dir", "/etc/prometheus/headers",
+		"base directory for http_headers files when loading config without a file path")
 	sidecarCmd.Flags().StringVar(&sidecarCfg.storePath, "store.path", "/prometheus/",
 		"path to save shard runtime")
 	sidecarCmd.Flags().StringVar(&sidecarCfg.injectProxyURL, "inject.proxy", "http://127.0.0.1:8008",
@@ -71,10 +75,16 @@ var sidecarCmd = &cobra.Command{
 			return err
 		}
 		var (
-			lg            = log.New()
-			scrapeManager = scrape.New(log.WithField("component", "scrape manager"))
-			configManager = prom.NewConfigManager()
-			targetManager = sidecar.NewTargetsManager(sidecarCfg.storePath, log.WithField("component", "targets manager"))
+			lg             = log.New()
+			scrapeManager  = scrape.New(log.WithField("component", "scrape manager"))
+			configManager  = prom.NewConfigManager()
+			targetManager  = sidecar.NewTargetsManager(sidecarCfg.storePath, log.WithField("component", "targets manager"))
+			httpHeadersDir = func() string {
+				if sidecarCfg.configFile != "" {
+					return filepath.Dir(sidecarCfg.configFile)
+				}
+				return sidecarCfg.httpHeadersBaseDir
+			}()
 
 			_     = scrape.InitMetricCollector(sidecarCfg.configOutFile)
 			proxy = sidecar.NewProxy(
@@ -85,11 +95,13 @@ var sidecarCmd = &cobra.Command{
 				log.WithField("component", "target manager"))
 
 			injector = sidecar.NewInjector(sidecarCfg.configOutFile, sidecar.InjectConfigOptions{
-				ProxyURL:      sidecarCfg.injectProxyURL,
-				PrometheusURL: sidecarCfg.prometheusURL,
+				ProxyURL:           sidecarCfg.injectProxyURL,
+				PrometheusURL:      sidecarCfg.prometheusURL,
+				HTTPHeadersBaseDir: httpHeadersDir,
 			}, lg.WithField("component", "injector"))
 			promCli = prom.NewClient(sidecarCfg.prometheusURL)
 		)
+		configManager.SetHTTPHeadersBaseDir(sidecarCfg.httpHeadersBaseDir)
 
 		configManager.AddReloadCallbacks(
 			func(cfg *prom.ConfigInfo) error {

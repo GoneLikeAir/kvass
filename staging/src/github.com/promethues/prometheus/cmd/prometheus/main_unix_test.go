@@ -11,16 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// +build !windows
+//go:build !windows
 
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/prometheus/prometheus/util/testutil"
 )
 
 // As soon as prometheus starts responding to http request it should be able to
@@ -30,12 +35,11 @@ func TestStartupInterrupt(t *testing.T) {
 		t.Skip("skipping test in short mode.")
 	}
 
-	prom := exec.Command(promPath, "-test.main", "--config.file="+promConfig, "--storage.tsdb.path="+promData)
+	port := fmt.Sprintf(":%d", testutil.RandomUnprivilegedPort(t))
+
+	prom := exec.Command(promPath, "-test.main", "--config.file="+promConfig, "--storage.tsdb.path="+t.TempDir(), "--web.listen-address=0.0.0.0"+port)
 	err := prom.Start()
-	if err != nil {
-		t.Errorf("execution error: %v", err)
-		return
-	}
+	require.NoError(t, err)
 
 	done := make(chan error, 1)
 	go func() {
@@ -45,11 +49,13 @@ func TestStartupInterrupt(t *testing.T) {
 	var startedOk bool
 	var stoppedErr error
 
+	url := "http://localhost" + port + "/graph"
+
 Loop:
 	for x := 0; x < 10; x++ {
-		// error=nil means prometheus has started so we can send the interrupt
+		// error=nil means prometheus has started, so we can send the interrupt
 		// signal and wait for the graceful shutdown.
-		if _, err := http.Get("http://localhost:9090/graph"); err == nil {
+		if _, err := http.Get(url); err == nil {
 			startedOk = true
 			prom.Process.Signal(os.Interrupt)
 			select {
@@ -62,13 +68,11 @@ Loop:
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	if !startedOk {
-		t.Errorf("prometheus didn't start in the specified timeout")
-		return
-	}
-	if err := prom.Process.Kill(); err == nil {
-		t.Errorf("prometheus didn't shutdown gracefully after sending the Interrupt signal")
-	} else if stoppedErr != nil && stoppedErr.Error() != "signal: interrupt" { // TODO - find a better way to detect when the process didn't exit as expected!
-		t.Errorf("prometheus exited with an unexpected error:%v", stoppedErr)
+	require.True(t, startedOk, "prometheus didn't start in the specified timeout")
+	err = prom.Process.Kill()
+	require.Error(t, err, "prometheus didn't shutdown gracefully after sending the Interrupt signal")
+	// TODO - find a better way to detect when the process didn't exit as expected!
+	if stoppedErr != nil {
+		require.EqualError(t, stoppedErr, "signal: interrupt", "prometheus exit")
 	}
 }

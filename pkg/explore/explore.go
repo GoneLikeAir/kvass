@@ -185,7 +185,7 @@ func (e *Explore) exploreOnce(ctx context.Context, t *exploringTarget) (err erro
 }
 
 func explore(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error) {
-	data, typ, err := scrapeInfo.Scrape(URL.String())
+	data, typ, err := scrapeInfo.Scrape(URL.String(), nil)
 	if err != nil {
 		return 0, 0, err
 	}

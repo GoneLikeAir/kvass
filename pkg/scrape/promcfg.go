@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v2"
+	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 )
+
+const defaultHTTPHeadersBaseDir = "/etc/prometheus/headers"
 
 // all the structures in this file are reference from prometheus config, but change some data type in order to print a raw-string config
 
@@ -35,6 +40,77 @@ type TLSConfig struct {
 	InsecureSkipVerify bool `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
 }
 
+var reservedHeaders = map[string]struct{}{
+	"Authorization":                       {},
+	"Host":                                {},
+	"Content-Encoding":                    {},
+	"Content-Length":                      {},
+	"Content-Type":                        {},
+	"User-Agent":                          {},
+	"Connection":                          {},
+	"Keep-Alive":                          {},
+	"Proxy-Authenticate":                  {},
+	"Proxy-Authorization":                 {},
+	"Www-Authenticate":                    {},
+	"Accept-Encoding":                     {},
+	"X-Prometheus-Remote-Write-Version":   {},
+	"X-Prometheus-Remote-Read-Version":    {},
+	"X-Prometheus-Scrape-Timeout-Seconds": {},
+	"X-Amz-Date":                          {},
+	"X-Amz-Security-Token":                {},
+	"X-Amz-Content-Sha256":                {},
+}
+
+// HTTPHeaders represents the configuration for HTTP headers.
+type HTTPHeaders struct {
+	Headers map[string]HTTPHeader `json:",inline" yaml:",inline"`
+}
+
+// HTTPHeader represents the configuration for a single HTTP header.
+type HTTPHeader struct {
+	Values  []string `json:"values,omitempty" yaml:"values,omitempty"`
+	Secrets []string `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	Files   []string `json:"files,omitempty" yaml:"files,omitempty"`
+}
+
+// SetDirectory makes headers file paths relative to the directory.
+func (h *HTTPHeaders) SetDirectory(dir string) {
+	if h == nil {
+		return
+	}
+	for name, header := range h.Headers {
+		header.SetDirectory(dir)
+		h.Headers[name] = header
+	}
+}
+
+// Validate ensures no reserved headers are configured.
+func (h *HTTPHeaders) Validate() error {
+	if h == nil {
+		return nil
+	}
+	for name := range h.Headers {
+		if _, ok := reservedHeaders[http.CanonicalHeaderKey(name)]; ok {
+			return fmt.Errorf("setting header %q is not allowed", http.CanonicalHeaderKey(name))
+		}
+	}
+	return nil
+}
+
+// SetDirectory makes header file paths relative to the directory.
+func (h *HTTPHeader) SetDirectory(dir string) {
+	for i, file := range h.Files {
+		h.Files[i] = joinDir(dir, file)
+	}
+}
+
+func joinDir(dir, file string) string {
+	if dir == "" || file == "" || filepath.IsAbs(file) {
+		return file
+	}
+	return filepath.Join(dir, file)
+}
+
 type HTTPClientConfig struct {
 	// The HTTP basic authentication credentials for the targets.
 	BasicAuth *BasicAuth `json:"basic_auth,omitempty" yaml:"basic_auth,omitempty"`
@@ -55,6 +131,40 @@ type HTTPClientConfig struct {
 	// marshalled configuration when set to false.
 	FollowRedirects bool `json:"follow_redirects,omitempty" yaml:"follow_redirects,omitempty"`
 	EnableHttp2     bool `yaml:"enable_http2,omitempty"`
+	// HTTPHeaders specifies headers to inject in requests.
+	HTTPHeaders *HTTPHeaders `json:"http_headers,omitempty" yaml:"http_headers,omitempty"`
+}
+
+// SetDirectory makes header file paths relative to the directory.
+func (c *HTTPClientConfig) SetDirectory(dir string) {
+	if c == nil || c.HTTPHeaders == nil {
+		return
+	}
+	c.HTTPHeaders.SetDirectory(dir)
+}
+
+func (c *HTTPClientConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	return c.HTTPHeaders.Validate()
+}
+
+func (c *HTTPClientConfig) ValidateFiles() error {
+	if c == nil || c.HTTPHeaders == nil {
+		return nil
+	}
+	for name, header := range c.HTTPHeaders.Headers {
+		for _, file := range header.Files {
+			if file == "" {
+				continue
+			}
+			if _, err := os.ReadFile(file); err != nil {
+				return fmt.Errorf("read http_header file %q for %q: %w", file, name, err)
+			}
+		}
+	}
+	return nil
 }
 
 //func (c *HTTPClientConfig) Cfg2Dto(cfg *commoncfg.HTTPClientConfig) {
@@ -158,11 +268,11 @@ type MetadataConfig struct {
 }
 
 type RemoteWriteConfig struct {
-	URL           string         `json:"url" yaml:"url"`
-	RemoteTimeout model.Duration `json:"remote_timeout,omitempty" yaml:"remote_timeout,omitempty"`
-	//Headers             map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
-	WriteRelabelConfigs []*RelabelConfig `json:"write_relabel_configs,omitempty" yaml:"write_relabel_configs,omitempty"`
-	Name                string           `json:"name,omitempty" yaml:"name,omitempty"`
+	URL                 string            `json:"url" yaml:"url"`
+	RemoteTimeout       model.Duration    `json:"remote_timeout,omitempty" yaml:"remote_timeout,omitempty"`
+	Headers             map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+	WriteRelabelConfigs []*RelabelConfig  `json:"write_relabel_configs,omitempty" yaml:"write_relabel_configs,omitempty"`
+	Name                string            `json:"name,omitempty" yaml:"name,omitempty"`
 
 	HTTPClientConfig `json:",inline" yaml:",inline"`
 	QueueConfig      QueueConfig `json:"queue_config,omitempty" yaml:"queue_config,omitempty"`
@@ -247,10 +357,11 @@ type RemoteWriteConfig struct {
 //}
 
 type RemoteReadConfig struct {
-	URL           string         `json:"url" yaml:"url"`
-	RemoteTimeout model.Duration `json:"remote_timeout,omitempty" yaml:"remote_timeout,omitempty"`
-	ReadRecent    bool           `json:"read_recent,omitempty" yaml:"read_recent,omitempty"`
-	Name          string         `json:"name,omitempty" yaml:"name,omitempty"`
+	URL           string            `json:"url" yaml:"url"`
+	RemoteTimeout model.Duration    `json:"remote_timeout,omitempty" yaml:"remote_timeout,omitempty"`
+	ReadRecent    bool              `json:"read_recent,omitempty" yaml:"read_recent,omitempty"`
+	Name          string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
 
 	HTTPClientConfig `json:",inline" yaml:",inline"`
 
@@ -573,6 +684,10 @@ var (
 )
 
 func Load(s string) (*PromConfig, error) {
+	return LoadWithBaseDir(s, "")
+}
+
+func LoadWithBaseDir(s, baseDir string) (*PromConfig, error) {
 	cfg := &PromConfig{}
 	// If the entire config body is empty the UnmarshalYAML method is
 	// never called. We thus have to set the DefaultConfig at the entry
@@ -583,7 +698,107 @@ func Load(s string) (*PromConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	if baseDir == "" {
+		baseDir = defaultHTTPHeadersBaseDir
+	}
+	cfg.setHTTPHeadersDirectory(baseDir)
+	applyLegacyHeadersPrecedence(cfg)
+	if err := cfg.validateHTTPHeaders(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+func (c *PromConfig) setHTTPHeadersDirectory(dir string) {
+	_ = visitHTTPClientConfigs(c, func(httpCfg *HTTPClientConfig) error {
+		httpCfg.SetDirectory(dir)
+		return nil
+	})
+}
+
+func (c *PromConfig) validateHTTPHeaders() error {
+	return visitHTTPClientConfigs(c, func(httpCfg *HTTPClientConfig) error {
+		if err := httpCfg.Validate(); err != nil {
+			return err
+		}
+		return httpCfg.ValidateFiles()
+	})
+}
+
+func applyLegacyHeadersPrecedence(cfg *PromConfig) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.RemoteWriteConfigs {
+		removeOverlappingHTTPHeaders(cfg.RemoteWriteConfigs[i].Headers, &cfg.RemoteWriteConfigs[i].HTTPClientConfig)
+	}
+	for i := range cfg.RemoteReadConfigs {
+		removeOverlappingHTTPHeaders(cfg.RemoteReadConfigs[i].Headers, &cfg.RemoteReadConfigs[i].HTTPClientConfig)
+	}
+}
+
+func removeOverlappingHTTPHeaders(legacy map[string]string, httpCfg *HTTPClientConfig) {
+	if len(legacy) == 0 || httpCfg == nil || httpCfg.HTTPHeaders == nil {
+		return
+	}
+	for legacyKey := range legacy {
+		canonical := http.CanonicalHeaderKey(legacyKey)
+		for headerKey := range httpCfg.HTTPHeaders.Headers {
+			if http.CanonicalHeaderKey(headerKey) == canonical {
+				delete(httpCfg.HTTPHeaders.Headers, headerKey)
+			}
+		}
+	}
+	if len(httpCfg.HTTPHeaders.Headers) == 0 {
+		httpCfg.HTTPHeaders = nil
+	}
+}
+
+func visitHTTPClientConfigs(cfg *PromConfig, fn func(*HTTPClientConfig) error) error {
+	if cfg == nil {
+		return nil
+	}
+	for _, sc := range cfg.ScrapeConfigs {
+		if sc == nil {
+			continue
+		}
+		if err := fn(&sc.HTTPClientConfig); err != nil {
+			return err
+		}
+		for _, k8sCfg := range sc.K8sSDConfig {
+			if k8sCfg == nil {
+				continue
+			}
+			if err := fn(&k8sCfg.HTTPClientConfig); err != nil {
+				return err
+			}
+		}
+		for _, httpCfg := range sc.HTTPSDConfig {
+			if httpCfg == nil {
+				continue
+			}
+			if err := fn(&httpCfg.HTTPClientConfig); err != nil {
+				return err
+			}
+		}
+	}
+	for _, rw := range cfg.RemoteWriteConfigs {
+		if rw == nil {
+			continue
+		}
+		if err := fn(&rw.HTTPClientConfig); err != nil {
+			return err
+		}
+	}
+	for _, rr := range cfg.RemoteReadConfigs {
+		if rr == nil {
+			continue
+		}
+		if err := fn(&rr.HTTPClientConfig); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c PromConfig) String() string {

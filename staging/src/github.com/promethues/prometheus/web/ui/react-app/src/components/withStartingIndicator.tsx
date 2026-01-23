@@ -4,6 +4,7 @@ import { Progress, Alert } from 'reactstrap';
 import { useFetchReadyInterval } from '../hooks/useFetch';
 import { WALReplayData } from '../types/types';
 import { usePathPrefix } from '../contexts/PathPrefixContext';
+import { useReady } from '../contexts/ReadyContext';
 
 interface StartingContentProps {
   isUnexpected: boolean;
@@ -23,17 +24,17 @@ export const StartingContent: FC<StartingContentProps> = ({ status, isUnexpected
     <div className="text-center m-3">
       <div className="m-4">
         <h2>Starting up...</h2>
-        {status?.max! > 0 ? (
+        {status && status.max > 0 ? (
           <div>
             <p>
-              Replaying WAL ({status?.current}/{status?.max})
+              Replaying WAL ({status.current}/{status.max})
             </p>
             <Progress
               animated
-              value={status?.current! - status?.min! + 1}
-              min={status?.min}
-              max={status?.max! - status?.min! + 1}
-              color={status?.max === status?.current ? 'success' : undefined}
+              value={status.current - status.min + 1}
+              min={status.min}
+              max={status.max - status.min + 1}
+              color={status.max === status.current ? 'success' : undefined}
               style={{ width: '10%', margin: 'auto' }}
             />
           </div>
@@ -43,13 +44,16 @@ export const StartingContent: FC<StartingContentProps> = ({ status, isUnexpected
   );
 };
 
-export const withStartingIndicator = <T extends {}>(Page: ComponentType<T>): FC<T> => ({ ...rest }) => {
-  const pathPrefix = usePathPrefix();
-  const { ready, walReplayStatus, isUnexpected } = useFetchReadyInterval(pathPrefix);
+export const withStartingIndicator =
+  <T extends Record<string, unknown>>(Page: ComponentType<T>): FC<T> =>
+  ({ ...rest }) => {
+    const pathPrefix = usePathPrefix();
+    const { ready, walReplayStatus, isUnexpected } = useFetchReadyInterval(pathPrefix);
+    const staticReady = useReady();
 
-  if (ready || isUnexpected) {
-    return <Page {...(rest as T)} />;
-  }
+    if (staticReady || ready) {
+      return <Page {...(rest as T)} />;
+    }
 
-  return <StartingContent isUnexpected={isUnexpected} status={walReplayStatus.data} />;
-};
+    return <StartingContent isUnexpected={isUnexpected} status={walReplayStatus.data} />;
+  };

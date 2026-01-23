@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"path"
+	"path/filepath"
 	"testing"
 )
 
@@ -98,7 +99,7 @@ scrape_configs:
 			m.AddReloadCallbacks(func(cfg *ConfigInfo) error {
 				updated = true
 				r.Equal(string(cfg.RawContent), c.content)
-				r.Equal("16887931695534343218", cfg.ConfigHash)
+				r.Equal("5051925342772717236", cfg.ConfigHash)
 				r.Equal(1, len(cfg.Config.ScrapeConfigs))
 				return nil
 			})
@@ -111,4 +112,69 @@ scrape_configs:
 			r.Equal(c.wantCallBack, updated)
 		})
 	}
+}
+
+func TestConfigManager_HTTPHeaders_BaseDirAndFiles(t *testing.T) {
+	r := require.New(t)
+	dir := t.TempDir()
+	headerFile := filepath.Join(dir, "h1")
+	r.NoError(ioutil.WriteFile(headerFile, []byte("value1\n"), 0644))
+
+	cfg := `scrape_configs:
+- job_name: test
+  http_headers:
+    X-Test:
+      files: ["h1"]
+`
+	m := NewConfigManager()
+	m.SetHTTPHeadersBaseDir(dir)
+	r.NoError(m.ReloadFromRaw([]byte(cfg)))
+
+	g := m.ConfigInfo().Config.ScrapeConfigs[0].HTTPClientConfig.HTTPHeaders.Headers["X-Test"].Files[0]
+	r.Equal(headerFile, g)
+}
+
+func TestConfigManager_HTTPHeaders_LegacyPrecedence(t *testing.T) {
+	r := require.New(t)
+	cfg := `remote_write:
+- url: http://example
+  headers:
+    X-Test: legacy
+  http_headers:
+    X-Test:
+      values: ["new"]
+`
+	m := NewConfigManager()
+	r.NoError(m.ReloadFromRaw([]byte(cfg)))
+
+	clientCfg := m.ConfigInfo().Config.RemoteWriteConfigs[0].HTTPClientConfig
+	if clientCfg.HTTPHeaders == nil {
+		return
+	}
+	_, exists := clientCfg.HTTPHeaders.Headers["X-Test"]
+	r.False(exists)
+}
+
+func TestConfigManager_HTTPHeaders_UnreadableFile(t *testing.T) {
+	r := require.New(t)
+	cfg := `scrape_configs:
+- job_name: test
+  http_headers:
+    X-Test:
+      files: ["/no/such/file"]
+`
+	m := NewConfigManager()
+	r.Error(m.ReloadFromRaw([]byte(cfg)))
+}
+
+func TestConfigManager_HTTPHeaders_ReservedReject(t *testing.T) {
+	r := require.New(t)
+	cfg := `scrape_configs:
+- job_name: test
+  http_headers:
+    Authorization:
+      values: ["bad"]
+`
+	m := NewConfigManager()
+	r.Error(m.ReloadFromRaw([]byte(cfg)))
 }

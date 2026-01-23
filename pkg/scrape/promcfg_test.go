@@ -1,6 +1,8 @@
 package scrape
 
 import (
+	"io/ioutil"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -88,6 +90,41 @@ alerting:
 	r.Equal("https", config.AlertingConfig.AlertmanagerConfigs[0].Scheme)
 	r.Equal(model.Duration(30*time.Second), config.AlertingConfig.AlertmanagerConfigs[0].Timeout)
 	r.Equal(AlertmanagerAPIVersionV2, config.AlertingConfig.AlertmanagerConfigs[0].APIVersion)
+}
+
+func TestPromConfig_HTTPHeaders_LoadAndValidate(t *testing.T) {
+	r := require.New(t)
+	dir := t.TempDir()
+	headerFile := filepath.Join(dir, "h1")
+	r.NoError(ioutil.WriteFile(headerFile, []byte("value1\n"), 0644))
+
+	cfg := `scrape_configs:
+- job_name: test
+  http_headers:
+    X-Test:
+      values: ["v1"]
+      secrets: ["s1"]
+      files: ["h1"]
+`
+	loaded, err := LoadWithBaseDir(cfg, dir)
+	r.NoError(err)
+
+	hdr := loaded.ScrapeConfigs[0].HTTPClientConfig.HTTPHeaders.Headers["X-Test"]
+	r.Equal("v1", hdr.Values[0])
+	r.Equal("s1", hdr.Secrets[0])
+	r.Equal(headerFile, hdr.Files[0])
+}
+
+func TestPromConfig_HTTPHeaders_ReservedReject(t *testing.T) {
+	r := require.New(t)
+	cfg := `scrape_configs:
+- job_name: test
+  http_headers:
+    Authorization:
+      values: ["bad"]
+`
+	_, err := Load(cfg)
+	r.Error(err)
 }
 
 func TestLoad_InvalidConfig(t *testing.T) {

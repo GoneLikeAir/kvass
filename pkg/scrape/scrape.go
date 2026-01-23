@@ -24,15 +24,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/relabel"
-	"github.com/prometheus/prometheus/pkg/textparse"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
+	"github.com/prometheus/prometheus/model/textparse"
 
 	"github.com/pkg/errors"
 	"go.etcd.io/etcd/version"
@@ -81,7 +80,7 @@ func newJobInfo(cfg config.ScrapeConfig) (*JobInfo, error) {
 }
 
 // Scrape scrape a url and return origin metrics data and contentType
-func (j *JobInfo) Scrape(url string) ([]byte, string, error) {
+func (j *JobInfo) Scrape(url string, extra http.Header) ([]byte, string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -95,14 +94,16 @@ func (j *JobInfo) Scrape(url string) ([]byte, string, error) {
 	if j.proxyURL != nil {
 		req.Header.Set("Origin-Proxy", j.proxyURL.String())
 	}
+	mergeExtraHeaders(req.Header, extra)
 
-	ctx, _ := context.WithTimeout(context.Background(), time.Duration(j.Config.ScrapeTimeout))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(j.Config.ScrapeTimeout))
+	defer cancel()
 	resp, err := j.Cli.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, "", err
 	}
 	defer func() {
-		io.Copy(ioutil.Discard, resp.Body)
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}()
 
@@ -131,12 +132,30 @@ func (j *JobInfo) Scrape(url string) ([]byte, string, error) {
 	return buf.Bytes(), resp.Header.Get("Content-Type"), nil
 }
 
+func mergeExtraHeaders(dst http.Header, extra http.Header) {
+	if extra == nil {
+		return
+	}
+	for name, values := range extra {
+		if len(values) == 0 {
+			continue
+		}
+		if len(dst.Values(name)) > 0 {
+			continue
+		}
+		for _, v := range values {
+			dst.Add(name, v)
+		}
+	}
+}
+
 // StatisticSeries statistic load from metrics raw data
 func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string, rc []*relabel.Config) (total int64, bodySIze int64, err error) {
-	var (
-		p  = textparse.New(b, contentType)
-		et textparse.Entry
-	)
+	p, parseErr := textparse.New(b, contentType, false, nil)
+	if parseErr != nil {
+		// textparse.New always returns a parser; ignore content-type errors.
+	}
+	var et textparse.Entry
 	var targetInfo *TargetInfo
 	if MetricCollector != nil {
 		targetInfo = MetricCollector.GetTargetInfo(URL.Host, URL.Path)
@@ -164,7 +183,9 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 			case textparse.EntrySeries:
 				var lset labels.Labels
 				_ = p.Metric(&lset)
-				if newSets := relabel.Process(lset, rc...); newSets != nil {
+				var keep bool
+				lset, keep = relabel.Process(lset, rc...)
+				if keep {
 					total++
 				}
 			}
@@ -182,7 +203,9 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 			case textparse.EntrySeries:
 				var lset labels.Labels
 				_ = p.Metric(&lset)
-				if newSets := relabel.Process(lset, rc...); newSets != nil {
+				var keep bool
+				lset, keep = relabel.Process(lset, rc...)
+				if keep {
 					total++
 				}
 				subsystem := ""
@@ -191,6 +214,9 @@ func StatisticSeries(jobName string, URL *url.URL, b []byte, contentType string,
 					subsystem = lset.Get("subsystem")
 					if subsystem == "" {
 						subsystem = lset.Get("subsystemId")
+					}
+					if subsystem == "" {
+						subsystem = targetInfo.SubsystemId
 					}
 				}
 				name := lset.Get("__name__")

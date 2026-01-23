@@ -4,6 +4,12 @@ export interface Metric {
   [key: string]: string;
 }
 
+export interface Histogram {
+  count: string;
+  sum: string;
+  buckets?: [number, string, string, string][];
+}
+
 export interface Exemplar {
   labels: { [key: string]: string };
   value: string;
@@ -16,10 +22,11 @@ export interface QueryParams {
   resolution: number;
 }
 
-export interface Rule {
+export type Rule = {
   alerts: Alert[];
   annotations: Record<string, string>;
   duration: number;
+  keepFiringFor: number;
   evaluationTime: string;
   health: string;
   labels: Record<string, string>;
@@ -29,7 +36,7 @@ export interface Rule {
   query: string;
   state: RuleState;
   type: string;
-}
+};
 
 export interface WALReplayData {
   min: number;

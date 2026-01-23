@@ -20,7 +20,6 @@ package sidecar
 import (
 	"fmt"
 	"github.com/prometheus/prometheus/discovery"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"strings"
@@ -28,7 +27,7 @@ import (
 	"tkestack.io/kvass/pkg/prom"
 	"tkestack.io/kvass/pkg/target"
 
-	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/model/relabel"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
@@ -39,6 +38,7 @@ import (
 	"github.com/pkg/errors"
 	config_util "github.com/prometheus/common/config"
 	"gopkg.in/yaml.v2"
+	yamlv3 "gopkg.in/yaml.v3"
 )
 
 const (
@@ -53,6 +53,8 @@ type InjectConfigOptions struct {
 	ProxyURL string
 	// PrometheusURL will be injected
 	PrometheusURL string
+	// HTTPHeadersBaseDir sets the base directory for http_headers files.
+	HTTPHeadersBaseDir string
 }
 
 // Injector gen injected config file
@@ -72,7 +74,7 @@ func NewInjector(outFile string, option InjectConfigOptions, log logrus.FieldLog
 		outFile:    outFile,
 		option:     option,
 		curTargets: map[string][]*target.Target{},
-		writeFile:  ioutil.WriteFile,
+		writeFile:  os.WriteFile,
 		log:        log,
 		curCfg:     prom.DefaultConfig,
 	}
@@ -179,11 +181,22 @@ func (i *Injector) marshal(cfg *config.Config) ([]byte, error) {
 		if w.HTTPClientConfig.BasicAuth != nil && w.HTTPClientConfig.BasicAuth.Password != "" {
 			password = append(password, string(w.HTTPClientConfig.BasicAuth.Password))
 		}
+
 	}
 
 	gen, err := yaml.Marshal(&cfg)
 	if err != nil {
 		return nil, errors.Wrapf(err, "marshal config failed")
+	}
+
+	gen, err = replaceAuthorizationCredentials(gen, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	gen, err = replaceHTTPHeaderSecrets(gen, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	data := string(gen)
@@ -194,7 +207,278 @@ func (i *Injector) marshal(cfg *config.Config) ([]byte, error) {
 	for _, pd := range password {
 		data = strings.Replace(data, "password: <secret>", fmt.Sprintf("password: %s", pd), 1)
 	}
+
 	return []byte(data), nil
+}
+
+func replaceAuthorizationCredentials(raw []byte, cfg *config.Config) ([]byte, error) {
+	if cfg == nil {
+		return raw, nil
+	}
+
+	writeCreds := make([]string, len(cfg.RemoteWriteConfigs))
+	for i, w := range cfg.RemoteWriteConfigs {
+		if w.HTTPClientConfig.Authorization != nil && w.HTTPClientConfig.Authorization.Credentials != "" {
+			writeCreds[i] = string(w.HTTPClientConfig.Authorization.Credentials)
+		}
+	}
+	readCreds := make([]string, len(cfg.RemoteReadConfigs))
+	for i, r := range cfg.RemoteReadConfigs {
+		if r.HTTPClientConfig.Authorization != nil && r.HTTPClientConfig.Authorization.Credentials != "" {
+			readCreds[i] = string(r.HTTPClientConfig.Authorization.Credentials)
+		}
+	}
+
+	var node yamlv3.Node
+	if err := yamlv3.Unmarshal(raw, &node); err != nil {
+		return nil, errors.Wrapf(err, "unmarshal config for authorization")
+	}
+	replaceAuthorizationSection(&node, "remote_write", writeCreds)
+	replaceAuthorizationSection(&node, "remote_read", readCreds)
+	gen, err := yamlv3.Marshal(&node)
+	if err != nil {
+		return nil, errors.Wrapf(err, "marshal config for authorization")
+	}
+	return gen, nil
+}
+
+func replaceHTTPHeaderSecrets(raw []byte, cfg *config.Config) ([]byte, error) {
+	if cfg == nil {
+		return raw, nil
+	}
+
+	scrapeHeaders := collectHTTPHeaderSecretsFromScrape(cfg)
+	remoteWriteHeaders := collectHTTPHeaderSecretsFromRemoteWrite(cfg)
+	remoteReadHeaders := collectHTTPHeaderSecretsFromRemoteRead(cfg)
+	alertHeaders := collectHTTPHeaderSecretsFromAlertmanagers(cfg)
+
+	var node yamlv3.Node
+	if err := yamlv3.Unmarshal(raw, &node); err != nil {
+		return nil, errors.Wrapf(err, "unmarshal config for http_headers")
+	}
+	replaceHTTPHeaderSection(&node, "scrape_configs", scrapeHeaders)
+	replaceHTTPHeaderSection(&node, "remote_write", remoteWriteHeaders)
+	replaceHTTPHeaderSection(&node, "remote_read", remoteReadHeaders)
+	replaceHTTPHeaderAlertmanagers(&node, alertHeaders)
+	gen, err := yamlv3.Marshal(&node)
+	if err != nil {
+		return nil, errors.Wrapf(err, "marshal config for http_headers")
+	}
+	return gen, nil
+}
+
+func collectHTTPHeaderSecrets(httpCfg *config_util.HTTPClientConfig) map[string][]string {
+	if httpCfg == nil || httpCfg.HTTPHeaders == nil {
+		return nil
+	}
+	secrets := make(map[string][]string)
+	for name, header := range httpCfg.HTTPHeaders.Headers {
+		if len(header.Secrets) == 0 {
+			continue
+		}
+		vals := make([]string, 0, len(header.Secrets))
+		for _, secret := range header.Secrets {
+			if secret == "" {
+				continue
+			}
+			vals = append(vals, string(secret))
+		}
+		if len(vals) > 0 {
+			secrets[name] = vals
+		}
+	}
+	if len(secrets) == 0 {
+		return nil
+	}
+	return secrets
+}
+
+func collectHTTPHeaderSecretsFromScrape(cfg *config.Config) []map[string][]string {
+	res := make([]map[string][]string, len(cfg.ScrapeConfigs))
+	for i, sc := range cfg.ScrapeConfigs {
+		res[i] = collectHTTPHeaderSecrets(&sc.HTTPClientConfig)
+	}
+	return res
+}
+
+func collectHTTPHeaderSecretsFromRemoteWrite(cfg *config.Config) []map[string][]string {
+	res := make([]map[string][]string, len(cfg.RemoteWriteConfigs))
+	for i := range cfg.RemoteWriteConfigs {
+		res[i] = collectHTTPHeaderSecrets(&cfg.RemoteWriteConfigs[i].HTTPClientConfig)
+	}
+	return res
+}
+
+func collectHTTPHeaderSecretsFromRemoteRead(cfg *config.Config) []map[string][]string {
+	res := make([]map[string][]string, len(cfg.RemoteReadConfigs))
+	for i := range cfg.RemoteReadConfigs {
+		res[i] = collectHTTPHeaderSecrets(&cfg.RemoteReadConfigs[i].HTTPClientConfig)
+	}
+	return res
+}
+
+func collectHTTPHeaderSecretsFromAlertmanagers(cfg *config.Config) []map[string][]string {
+	res := make([]map[string][]string, len(cfg.AlertingConfig.AlertmanagerConfigs))
+	for i := range cfg.AlertingConfig.AlertmanagerConfigs {
+		res[i] = collectHTTPHeaderSecrets(&cfg.AlertingConfig.AlertmanagerConfigs[i].HTTPClientConfig)
+	}
+	return res
+}
+
+func replaceHTTPHeaderSection(root *yamlv3.Node, key string, secrets []map[string][]string) {
+	if root == nil || len(secrets) == 0 {
+		return
+	}
+
+	mapping := root
+	if root.Kind == yamlv3.DocumentNode && len(root.Content) > 0 {
+		mapping = root.Content[0]
+	}
+	if mapping.Kind != yamlv3.MappingNode {
+		return
+	}
+
+	seq := findMapValue(mapping, key)
+	if seq == nil || seq.Kind != yamlv3.SequenceNode {
+		return
+	}
+	for idx, item := range seq.Content {
+		if idx >= len(secrets) {
+			break
+		}
+		if len(secrets[idx]) == 0 {
+			continue
+		}
+		replaceHTTPHeaderSecretsInItem(item, secrets[idx])
+	}
+}
+
+func replaceHTTPHeaderAlertmanagers(root *yamlv3.Node, secrets []map[string][]string) {
+	if root == nil || len(secrets) == 0 {
+		return
+	}
+
+	mapping := root
+	if root.Kind == yamlv3.DocumentNode && len(root.Content) > 0 {
+		mapping = root.Content[0]
+	}
+	if mapping.Kind != yamlv3.MappingNode {
+		return
+	}
+	alerting := findMapValue(mapping, "alerting")
+	if alerting == nil || alerting.Kind != yamlv3.MappingNode {
+		return
+	}
+	seq := findMapValue(alerting, "alertmanagers")
+	if seq == nil || seq.Kind != yamlv3.SequenceNode {
+		return
+	}
+	for idx, item := range seq.Content {
+		if idx >= len(secrets) {
+			break
+		}
+		if len(secrets[idx]) == 0 {
+			continue
+		}
+		replaceHTTPHeaderSecretsInItem(item, secrets[idx])
+	}
+}
+
+func replaceHTTPHeaderSecretsInItem(item *yamlv3.Node, secrets map[string][]string) {
+	if item == nil || item.Kind != yamlv3.MappingNode || len(secrets) == 0 {
+		return
+	}
+	headersNode := findMapValue(item, "http_headers")
+	if headersNode == nil {
+		return
+	}
+	replaceHTTPHeaderSecretsInMap(headersNode, secrets)
+}
+
+func replaceHTTPHeaderSecretsInMap(headersNode *yamlv3.Node, secrets map[string][]string) {
+	if headersNode == nil || headersNode.Kind != yamlv3.MappingNode {
+		return
+	}
+	for i := 0; i < len(headersNode.Content)-1; i += 2 {
+		headerName := headersNode.Content[i].Value
+		headerNode := headersNode.Content[i+1]
+		if headerNode.Kind != yamlv3.MappingNode {
+			continue
+		}
+		values, ok := secrets[headerName]
+		if !ok || len(values) == 0 {
+			continue
+		}
+		secretsNode := findMapValue(headerNode, "secrets")
+		if secretsNode == nil {
+			continue
+		}
+		switch secretsNode.Kind {
+		case yamlv3.SequenceNode:
+			for idx, secretNode := range secretsNode.Content {
+				if idx >= len(values) {
+					break
+				}
+				secretNode.Value = values[idx]
+			}
+		case yamlv3.ScalarNode:
+			secretsNode.Value = values[0]
+		}
+	}
+}
+
+func replaceAuthorizationSection(root *yamlv3.Node, key string, creds []string) {
+	if root == nil || len(creds) == 0 {
+		return
+	}
+
+	mapping := root
+	if root.Kind == yamlv3.DocumentNode && len(root.Content) > 0 {
+		mapping = root.Content[0]
+	}
+	if mapping.Kind != yamlv3.MappingNode {
+		return
+	}
+
+	for i := 0; i < len(mapping.Content)-1; i += 2 {
+		if mapping.Content[i].Value != key {
+			continue
+		}
+		seq := mapping.Content[i+1]
+		if seq.Kind != yamlv3.SequenceNode {
+			return
+		}
+		for idx, item := range seq.Content {
+			if idx >= len(creds) {
+				break
+			}
+			if creds[idx] == "" {
+				continue
+			}
+			authNode := findMapValue(item, "authorization")
+			if authNode == nil {
+				continue
+			}
+			credNode := findMapValue(authNode, "credentials")
+			if credNode == nil {
+				continue
+			}
+			credNode.Value = creds[idx]
+		}
+		return
+	}
+}
+
+func findMapValue(node *yamlv3.Node, key string) *yamlv3.Node {
+	if node == nil || node.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func (i *Injector) inject() error {
@@ -208,6 +492,9 @@ func (i *Injector) inject() error {
 	cfg := &config.Config{}
 	if err := yaml.Unmarshal(i.curCfg.RawContent, &cfg); err != nil {
 		return errors.Wrapf(err, "unmarshal config")
+	}
+	if i.option.HTTPHeadersBaseDir != "" {
+		cfg.SetDirectory(i.option.HTTPHeadersBaseDir)
 	}
 
 	if err := i.injectJobs(cfg); err != nil {

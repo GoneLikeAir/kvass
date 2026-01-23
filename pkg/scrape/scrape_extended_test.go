@@ -5,13 +5,15 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,12 +49,13 @@ func TestJobInfo_Scrape_ErrorCases(t *testing.T) {
 	info := &JobInfo{
 		Cli: &http.Client{},
 		Config: &config.ScrapeConfig{
-			JobName: "test",
+			JobName:       "test",
+			ScrapeTimeout: model.Duration(5 * time.Second),
 		},
 		proxyURL: u,
 	}
 
-	_, _, err := info.Scrape("invalid-url")
+	_, _, err := info.Scrape("invalid-url", nil)
 	r.Error(err)
 
 	// 测试 HTTP 错误状态码
@@ -62,7 +65,7 @@ func TestJobInfo_Scrape_ErrorCases(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, err = info.Scrape(ts.URL)
+	_, _, err = info.Scrape(ts.URL, nil)
 	if err != nil {
 		r.Error(err)
 		r.Contains(err.Error(), "server returned HTTP status")
@@ -86,7 +89,7 @@ func TestJobInfo_Scrape_ErrorCases(t *testing.T) {
 		},
 	}
 
-	_, _, err = info2.Scrape(ts2.URL)
+	_, _, err = info2.Scrape(ts2.URL, nil)
 	// 超时测试可能不稳定，所以我们检查错误类型
 	if err != nil {
 		r.Error(err)
@@ -116,7 +119,7 @@ func TestJobInfo_Scrape_GzipError(t *testing.T) {
 		proxyURL: u,
 	}
 
-	_, _, err := info.Scrape(ts.URL)
+	_, _, err := info.Scrape(ts.URL, nil)
 	r.Error(err)
 }
 
@@ -142,7 +145,7 @@ func TestJobInfo_Scrape_CopyError(t *testing.T) {
 		proxyURL: u,
 	}
 
-	_, _, err := info.Scrape(ts.URL)
+	_, _, err := info.Scrape(ts.URL, nil)
 	// 这个测试可能不会总是产生错误，取决于服务器实现
 	_ = err
 }
@@ -269,6 +272,48 @@ test_metric{label2="value2"} 2
 	r.NoError(err)
 	r.Greater(total, int64(0))
 	r.Greater(bodySize, int64(0))
+}
+
+func TestJobInfo_Scrape_HTTPHeaders_OrderAndFileRefresh(t *testing.T) {
+	r := require.New(t)
+	dir := t.TempDir()
+	headerFile := filepath.Join(dir, "h1")
+	r.NoError(os.WriteFile(headerFile, []byte("file1\n"), 0644))
+
+	var got []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		got = req.Header.Values("X-Test")
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer ts.Close()
+
+	cfg := config.ScrapeConfig{
+		JobName:       "test",
+		ScrapeTimeout: model.Duration(time.Second),
+		HTTPClientConfig: config_util.HTTPClientConfig{
+			HTTPHeaders: &config_util.Headers{
+				Headers: map[string]config_util.Header{
+					"X-Test": {
+						Values:  []string{"v1"},
+						Secrets: []config_util.Secret{"s1"},
+						Files:   []string{headerFile},
+					},
+				},
+			},
+		},
+	}
+	info, err := newJobInfo(cfg)
+	r.NoError(err)
+
+	_, _, err = info.Scrape(ts.URL, nil)
+	r.NoError(err)
+	r.Equal([]string{"v1", "s1", "file1"}, got)
+
+	r.NoError(os.WriteFile(headerFile, []byte("file2\n"), 0644))
+	_, _, err = info.Scrape(ts.URL, nil)
+	r.NoError(err)
+	r.Equal("file2", got[len(got)-1])
 }
 
 func TestStatisticSeries_ParseError(t *testing.T) {
@@ -417,7 +462,7 @@ func TestJobInfo_Scrape_WithHeaders(t *testing.T) {
 		proxyURL: u,
 	}
 
-	data, contentType, err := info.Scrape(ts.URL)
+	data, contentType, err := info.Scrape(ts.URL, nil)
 	r.NoError(err)
 	r.Equal("application/openmetrics-text", contentType)
 	r.Equal([]byte("test_metric 1"), data)
@@ -445,7 +490,7 @@ func TestJobInfo_Scrape_WithOriginProxy(t *testing.T) {
 		proxyURL: u,
 	}
 
-	data, contentType, err := info.Scrape(ts.URL)
+	data, contentType, err := info.Scrape(ts.URL, nil)
 	// 在某些环境中，代理测试可能不稳定
 	if err != nil {
 		t.Logf("Origin proxy test failed with error: %v", err)
@@ -477,7 +522,7 @@ func TestJobInfo_Scrape_WithContextTimeout(t *testing.T) {
 		},
 	}
 
-	_, _, err := info.Scrape(ts.URL)
+	_, _, err := info.Scrape(ts.URL, nil)
 	r.Error(err)
 
 	// 验证确实在超时时间内返回

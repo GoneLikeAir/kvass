@@ -4,11 +4,26 @@ import { shallow, mount } from 'enzyme';
 import Graph from './Graph';
 import ReactResizeDetector from 'react-resize-detector';
 import { Legend } from './Legend';
+import { GraphDisplayMode } from './Panel';
 
 describe('Graph', () => {
   beforeAll(() => {
     jest.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: any) => cb());
   });
+
+  // Source: https://github.com/maslianok/react-resize-detector#testing-with-enzyme-and-jest
+  beforeEach(() => {
+    window.ResizeObserver = jest.fn().mockImplementation(() => ({
+      observe: jest.fn(),
+      unobserve: jest.fn(),
+      disconnect: jest.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    window.ResizeObserver = ResizeObserver;
+  });
+
   describe('data is returned', () => {
     const props: any = {
       queryParams: {
@@ -16,7 +31,7 @@ describe('Graph', () => {
         endTime: 1572130692,
         resolution: 28,
       },
-      stacked: false,
+      displayMode: GraphDisplayMode.Stacked,
       data: {
         resultType: 'matrix',
         result: [
@@ -65,7 +80,7 @@ describe('Graph', () => {
             exemplars: [
               {
                 labels: {
-                  traceID: '12345',
+                  trace_id: '12345',
                 },
                 timestamp: 1572130580,
                 value: '9',
@@ -78,9 +93,9 @@ describe('Graph', () => {
     };
     it('renders a graph with props', () => {
       const graph = shallow(<Graph {...props} />);
-      const div = graph.find('div').filterWhere(elem => elem.prop('className') === 'graph-test');
+      const div = graph.find('div').filterWhere((elem) => elem.prop('className') === 'graph-test');
       const resize = div.find(ReactResizeDetector);
-      const innerdiv = div.find('div').filterWhere(elem => elem.prop('className') === 'graph-chart');
+      const innerdiv = div.find('div').filterWhere((elem) => elem.prop('className') === 'graph-chart');
       expect(resize.prop('handleWidth')).toBe(true);
       expect(div).toHaveLength(1);
       expect(innerdiv).toHaveLength(1);
@@ -101,7 +116,7 @@ describe('Graph', () => {
       graph = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,
@@ -125,7 +140,7 @@ describe('Graph', () => {
             exemplars: [],
             series: [
               {
-                color: 'rgb(237,194,64)',
+                color: '#008000',
                 data: [[1572128592000, null]],
                 index: 0,
                 labels: {},
@@ -138,14 +153,14 @@ describe('Graph', () => {
       );
     });
     it('should trigger state update when stacked prop is changed', () => {
-      graph.setProps({ stacked: false });
+      graph.setProps({ displayMode: GraphDisplayMode.Lines });
       expect(spyState).toHaveBeenCalledWith(
         {
           chartData: {
             exemplars: [],
             series: [
               {
-                color: 'rgb(237,194,64)',
+                color: '#008000',
                 data: [[1572128592000, null]],
                 index: 0,
                 labels: {},
@@ -163,7 +178,7 @@ describe('Graph', () => {
       const graph = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572130692,
@@ -187,7 +202,7 @@ describe('Graph', () => {
       const graph = shallow(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,
@@ -207,7 +222,7 @@ describe('Graph', () => {
       const graph = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,
@@ -226,7 +241,7 @@ describe('Graph', () => {
       const graph = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,
@@ -247,7 +262,7 @@ describe('Graph', () => {
       const graph = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,
@@ -264,10 +279,7 @@ describe('Graph', () => {
       );
       (graph.instance() as any).plot(); // create chart
       const spyPlotSetAndDraw = jest.spyOn(graph.instance() as any, 'plotSetAndDraw');
-      graph
-        .find('.legend-item')
-        .at(0)
-        .simulate('mouseover');
+      graph.find('.legend-item').at(0).simulate('mouseover');
       expect(spyPlotSetAndDraw).toHaveBeenCalledTimes(1);
     });
     it('should call spyPlotSetAndDraw with chartDate from state as default value', () => {
@@ -278,7 +290,7 @@ describe('Graph', () => {
       const graph: any = mount(
         <Graph
           {...({
-            stacked: true,
+            displayMode: GraphDisplayMode.Stacked,
             queryParams: {
               startTime: 1572128592,
               endTime: 1572128598,

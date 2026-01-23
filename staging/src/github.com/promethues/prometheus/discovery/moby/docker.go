@@ -19,15 +19,20 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/go-kit/log"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
+
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/discovery/refresh"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
@@ -51,10 +56,12 @@ const (
 
 // DefaultDockerSDConfig is the default Docker SD configuration.
 var DefaultDockerSDConfig = DockerSDConfig{
-	RefreshInterval:  model.Duration(60 * time.Second),
-	Port:             80,
-	Filters:          []Filter{},
-	HTTPClientConfig: config.DefaultHTTPClientConfig,
+	RefreshInterval:    model.Duration(60 * time.Second),
+	Port:               80,
+	Filters:            []Filter{},
+	HostNetworkingHost: "localhost",
+	HTTPClientConfig:   config.DefaultHTTPClientConfig,
+	MatchFirstNetwork:  true,
 }
 
 func init() {
@@ -65,11 +72,20 @@ func init() {
 type DockerSDConfig struct {
 	HTTPClientConfig config.HTTPClientConfig `yaml:",inline"`
 
-	Host    string   `yaml:"host"`
-	Port    int      `yaml:"port"`
-	Filters []Filter `yaml:"filters"`
+	Host               string   `yaml:"host"`
+	Port               int      `yaml:"port"`
+	Filters            []Filter `yaml:"filters"`
+	HostNetworkingHost string   `yaml:"host_networking_host"`
 
-	RefreshInterval model.Duration `yaml:"refresh_interval"`
+	RefreshInterval   model.Duration `yaml:"refresh_interval"`
+	MatchFirstNetwork bool           `yaml:"match_first_network"`
+}
+
+// NewDiscovererMetrics implements discovery.Config.
+func (*DockerSDConfig) NewDiscovererMetrics(_ prometheus.Registerer, rmi discovery.RefreshMetricsInstantiator) discovery.DiscovererMetrics {
+	return &dockerMetrics{
+		refreshMetrics: rmi,
+	}
 }
 
 // Name returns the name of the Config.
@@ -77,7 +93,7 @@ func (*DockerSDConfig) Name() string { return "docker" }
 
 // NewDiscoverer returns a Discoverer for the Config.
 func (c *DockerSDConfig) NewDiscoverer(opts discovery.DiscovererOptions) (discovery.Discoverer, error) {
-	return NewDockerDiscovery(c, opts.Logger)
+	return NewDockerDiscovery(c, opts.Logger, opts.Metrics)
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -104,17 +120,24 @@ func (c *DockerSDConfig) UnmarshalYAML(unmarshal func(interface{}) error) error 
 
 type DockerDiscovery struct {
 	*refresh.Discovery
-	client  *client.Client
-	port    int
-	filters filters.Args
+	client             *client.Client
+	port               int
+	hostNetworkingHost string
+	filters            filters.Args
+	matchFirstNetwork  bool
 }
 
 // NewDockerDiscovery returns a new DockerDiscovery which periodically refreshes its targets.
-func NewDockerDiscovery(conf *DockerSDConfig, logger log.Logger) (*DockerDiscovery, error) {
-	var err error
+func NewDockerDiscovery(conf *DockerSDConfig, logger log.Logger, metrics discovery.DiscovererMetrics) (*DockerDiscovery, error) {
+	m, ok := metrics.(*dockerMetrics)
+	if !ok {
+		return nil, fmt.Errorf("invalid discovery metrics type")
+	}
 
 	d := &DockerDiscovery{
-		port: conf.Port,
+		port:               conf.Port,
+		hostNetworkingHost: conf.HostNetworkingHost,
+		matchFirstNetwork:  conf.MatchFirstNetwork,
 	}
 
 	hostURL, err := url.Parse(conf.Host)
@@ -138,7 +161,7 @@ func NewDockerDiscovery(conf *DockerSDConfig, logger log.Logger) (*DockerDiscove
 	// unix, which are not supported by the HTTP client. Passing HTTP client
 	// options to the Docker client makes those non-HTTP requests fail.
 	if hostURL.Scheme == "http" || hostURL.Scheme == "https" {
-		rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "docker_sd", config.WithHTTP2Disabled())
+		rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "docker_sd")
 		if err != nil {
 			return nil, err
 		}
@@ -160,10 +183,13 @@ func NewDockerDiscovery(conf *DockerSDConfig, logger log.Logger) (*DockerDiscove
 	}
 
 	d.Discovery = refresh.NewDiscovery(
-		logger,
-		"docker",
-		time.Duration(conf.RefreshInterval),
-		d.refresh,
+		refresh.Options{
+			Logger:              logger,
+			Mech:                "docker",
+			Interval:            time.Duration(conf.RefreshInterval),
+			RefreshF:            d.refresh,
+			MetricsInstantiator: m.refreshMetrics,
+		},
 	)
 	return d, nil
 }
@@ -173,7 +199,7 @@ func (d *DockerDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 		Source: "Docker",
 	}
 
-	containers, err := d.client.ContainerList(ctx, types.ContainerListOptions{Filters: d.filters})
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{Filters: d.filters})
 	if err != nil {
 		return nil, fmt.Errorf("error while listing containers: %w", err)
 	}
@@ -181,6 +207,11 @@ func (d *DockerDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 	networkLabels, err := getNetworksLabels(ctx, d.client, dockerLabel)
 	if err != nil {
 		return nil, fmt.Errorf("error while computing network labels: %w", err)
+	}
+
+	allContainers := make(map[string]types.Container)
+	for _, c := range containers {
+		allContainers[c.ID] = c
 	}
 
 	for _, c := range containers {
@@ -199,7 +230,48 @@ func (d *DockerDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 			commonLabels[dockerLabelContainerLabelPrefix+ln] = v
 		}
 
-		for _, n := range c.NetworkSettings.Networks {
+		networks := c.NetworkSettings.Networks
+		containerNetworkMode := container.NetworkMode(c.HostConfig.NetworkMode)
+		if len(networks) == 0 {
+			// Try to lookup shared networks
+			for {
+				if containerNetworkMode.IsContainer() {
+					tmpContainer, exists := allContainers[containerNetworkMode.ConnectedContainer()]
+					if !exists {
+						break
+					}
+					networks = tmpContainer.NetworkSettings.Networks
+					containerNetworkMode = container.NetworkMode(tmpContainer.HostConfig.NetworkMode)
+					if len(networks) > 0 {
+						break
+					}
+				} else {
+					break
+				}
+			}
+		}
+
+		if d.matchFirstNetwork && len(networks) > 1 {
+			// Sort networks by name and take first non-nil network.
+			keys := make([]string, 0, len(networks))
+			for k, n := range networks {
+				if n != nil {
+					keys = append(keys, k)
+				}
+			}
+			if len(keys) > 0 {
+				sort.Strings(keys)
+				firstNetworkMode := keys[0]
+				firstNetwork := networks[firstNetworkMode]
+				networks = map[string]*network.EndpointSettings{firstNetworkMode: firstNetwork}
+			}
+		}
+
+		for _, n := range networks {
+			if n == nil {
+				continue
+			}
+
 			var added bool
 
 			for _, p := range c.Ports {
@@ -245,7 +317,15 @@ func (d *DockerDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 					labels[model.LabelName(k)] = model.LabelValue(v)
 				}
 
-				addr := net.JoinHostPort(n.IPAddress, strconv.FormatUint(uint64(d.port), 10))
+				// Containers in host networking mode don't have ports,
+				// so they only end up here, not in the previous loop.
+				var addr string
+				if c.HostConfig.NetworkMode != "host" {
+					addr = net.JoinHostPort(n.IPAddress, strconv.FormatUint(uint64(d.port), 10))
+				} else {
+					addr = d.hostNetworkingHost
+				}
+
 				labels[model.AddressLabel] = model.LabelValue(addr)
 				tg.Targets = append(tg.Targets, labels)
 			}

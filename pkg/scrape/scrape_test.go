@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/model/relabel"
 
 	"github.com/stretchr/testify/require"
 
@@ -85,7 +85,7 @@ metrics0{code="201"} 2
 				proxyURL: u,
 			}
 
-			retData, typ, err := info.Scrape(ts.URL)
+			retData, typ, err := info.Scrape(ts.URL, nil)
 			r.NoError(err)
 			r.Equal(string(data), string(retData))
 			r.Equal("application/openmetrics-text", typ)

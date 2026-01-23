@@ -25,10 +25,11 @@ import (
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
-	"github.com/prometheus/prometheus/discovery/refresh"
-	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
+
+	"github.com/prometheus/prometheus/discovery/refresh"
+	"github.com/prometheus/prometheus/discovery/targetgroup"
 )
 
 const (
@@ -81,7 +82,7 @@ func newInstanceDiscovery(conf *SDConfig) (*instanceDiscovery, error) {
 		tagsFilter: conf.TagsFilter,
 	}
 
-	rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "scaleway_sd", config.WithHTTP2Disabled())
+	rt, err := config.NewRoundTripperFromConfig(conf.HTTPClientConfig, "scaleway_sd")
 	if err != nil {
 		return nil, err
 	}
@@ -173,23 +174,27 @@ func (d *instanceDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, 
 			labels[instanceTagsLabel] = model.LabelValue(tags)
 		}
 
-		if server.IPv6 != nil {
-			labels[instancePublicIPv6Label] = model.LabelValue(server.IPv6.Address.String())
+		addr := ""
+		if server.IPv6 != nil { //nolint:staticcheck
+			labels[instancePublicIPv6Label] = model.LabelValue(server.IPv6.Address.String()) //nolint:staticcheck
+			addr = server.IPv6.Address.String()                                              //nolint:staticcheck
 		}
 
-		if server.PublicIP != nil {
-			labels[instancePublicIPv4Label] = model.LabelValue(server.PublicIP.Address.String())
+		if server.PublicIP != nil { //nolint:staticcheck
+			labels[instancePublicIPv4Label] = model.LabelValue(server.PublicIP.Address.String()) //nolint:staticcheck
+			addr = server.PublicIP.Address.String()                                              //nolint:staticcheck
 		}
 
 		if server.PrivateIP != nil {
 			labels[instancePrivateIPv4Label] = model.LabelValue(*server.PrivateIP)
-
-			addr := net.JoinHostPort(*server.PrivateIP, strconv.FormatUint(uint64(d.port), 10))
-			labels[model.AddressLabel] = model.LabelValue(addr)
-
-			targets = append(targets, labels)
+			addr = *server.PrivateIP
 		}
 
+		if addr != "" {
+			addr := net.JoinHostPort(addr, strconv.FormatUint(uint64(d.port), 10))
+			labels[model.AddressLabel] = model.LabelValue(addr)
+			targets = append(targets, labels)
+		}
 	}
 
 	return []*targetgroup.Group{{Source: "scaleway", Targets: targets}}, nil

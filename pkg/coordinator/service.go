@@ -26,6 +26,7 @@ import (
 
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/scrape"
 	v1 "github.com/prometheus/prometheus/web/api/v1"
 	"github.com/sirupsen/logrus"
@@ -77,7 +78,11 @@ func NewService(
 		return api.Data(nil)
 	}))
 	w.GET("/api/v1/status/config", api.Wrap(lg, func(ctx *gin.Context) *api.Result {
-		return api.Data(gin.H{"yaml": string(cfgManager.ConfigInfo().RawContent)})
+		redacted, err := prom.RedactHTTPHeadersSecrets(cfgManager.ConfigInfo().RawContent)
+		if err != nil {
+			return api.InternalErr(err, "redact config")
+		}
+		return api.Data(gin.H{"yaml": string(redacted)})
 	}))
 	return w
 }
@@ -177,7 +182,7 @@ func (s *Service) getTargets(state string, statistics string, health []string, j
 		res.DroppedTargets = make([]*v1.DroppedTarget, 0, len(tDropped))
 		for _, t := range tDropped {
 			res.DroppedTargets = append(res.DroppedTargets, &v1.DroppedTarget{
-				DiscoveredLabels: t.DiscoveredLabels().Map(),
+				DiscoveredLabels: t.DiscoveredLabels(),
 			})
 		}
 	} else {
@@ -244,10 +249,11 @@ func flatten(targets map[string][]*discovery.SDTargets) []*scrape.Target {
 }
 
 func makeTarget(jobName string, target *scrape.Target, rt *target.ScrapeStatus) *ExtendTarget {
+	var scratch labels.ScratchBuilder
 	return &ExtendTarget{
 		Target: v1.Target{
-			DiscoveredLabels:   target.DiscoveredLabels().Map(),
-			Labels:             target.Labels().Map(),
+			DiscoveredLabels:   target.DiscoveredLabels(),
+			Labels:             target.Labels(&scratch),
 			ScrapePool:         jobName,
 			ScrapeURL:          target.URL().String(),
 			GlobalURL:          target.URL().String(),

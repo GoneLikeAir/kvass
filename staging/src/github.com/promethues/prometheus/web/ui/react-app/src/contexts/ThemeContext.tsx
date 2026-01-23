@@ -9,7 +9,7 @@ export interface ThemeCtx {
   setTheme: (t: themeSetting) => void;
 }
 
-// defaults, will be overriden in App.tsx
+// defaults, will be overridden in App.tsx
 export const ThemeContext = React.createContext<ThemeCtx>({
   theme: 'light',
   userPreference: 'auto',
@@ -17,6 +17,6 @@ export const ThemeContext = React.createContext<ThemeCtx>({
   setTheme: (s: themeSetting) => {},
 });
 
-export const useTheme = () => {
+export const useTheme = (): ThemeCtx => {
   return React.useContext(ThemeContext);
 };

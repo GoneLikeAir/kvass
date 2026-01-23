@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 // TestMetricInfo_ConcurrentAddLabels 测试多个 goroutine 同时调用 AddLabels 方法的线程安全性

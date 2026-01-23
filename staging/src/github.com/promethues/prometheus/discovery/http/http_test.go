@@ -22,10 +22,14 @@ import (
 	"time"
 
 	"github.com/go-kit/log"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/stretchr/testify/require"
+
+	"github.com/prometheus/prometheus/discovery"
+	"github.com/prometheus/prometheus/discovery/targetgroup"
 )
 
 func TestHTTPValidRefresh(t *testing.T) {
@@ -38,11 +42,18 @@ func TestHTTPValidRefresh(t *testing.T) {
 		RefreshInterval:  model.Duration(30 * time.Second),
 	}
 
-	d, err := NewDiscovery(&cfg, log.NewNopLogger())
+	reg := prometheus.NewRegistry()
+	refreshMetrics := discovery.NewRefreshMetrics(reg)
+	defer refreshMetrics.Unregister()
+	metrics := cfg.NewDiscovererMetrics(reg, refreshMetrics)
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), nil, metrics)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	tgs, err := d.refresh(ctx)
+	tgs, err := d.Refresh(ctx)
 	require.NoError(t, err)
 
 	expectedTargets := []*targetgroup.Group{
@@ -59,8 +70,8 @@ func TestHTTPValidRefresh(t *testing.T) {
 			Source: urlSource(ts.URL+"/http_sd.good.json", 0),
 		},
 	}
-	require.Equal(t, tgs, expectedTargets)
-
+	require.Equal(t, expectedTargets, tgs)
+	require.Equal(t, 0.0, getFailureCount(d.metrics.failuresCount))
 }
 
 func TestHTTPInvalidCode(t *testing.T) {
@@ -76,12 +87,20 @@ func TestHTTPInvalidCode(t *testing.T) {
 		RefreshInterval:  model.Duration(30 * time.Second),
 	}
 
-	d, err := NewDiscovery(&cfg, log.NewNopLogger())
+	reg := prometheus.NewRegistry()
+	refreshMetrics := discovery.NewRefreshMetrics(reg)
+	defer refreshMetrics.Unregister()
+	metrics := cfg.NewDiscovererMetrics(reg, refreshMetrics)
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), nil, metrics)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	_, err = d.refresh(ctx)
+	_, err = d.Refresh(ctx)
 	require.EqualError(t, err, "server returned HTTP status 400 Bad Request")
+	require.Equal(t, 1.0, getFailureCount(d.metrics.failuresCount))
 }
 
 func TestHTTPInvalidFormat(t *testing.T) {
@@ -97,12 +116,40 @@ func TestHTTPInvalidFormat(t *testing.T) {
 		RefreshInterval:  model.Duration(30 * time.Second),
 	}
 
-	d, err := NewDiscovery(&cfg, log.NewNopLogger())
+	reg := prometheus.NewRegistry()
+	refreshMetrics := discovery.NewRefreshMetrics(reg)
+	defer refreshMetrics.Unregister()
+	metrics := cfg.NewDiscovererMetrics(reg, refreshMetrics)
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), nil, metrics)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	_, err = d.refresh(ctx)
+	_, err = d.Refresh(ctx)
 	require.EqualError(t, err, `unsupported content type "text/plain; charset=utf-8"`)
+	require.Equal(t, 1.0, getFailureCount(d.metrics.failuresCount))
+}
+
+func getFailureCount(failuresCount prometheus.Counter) float64 {
+	failureChan := make(chan prometheus.Metric)
+
+	go func() {
+		failuresCount.Collect(failureChan)
+		close(failureChan)
+	}()
+
+	var counter dto.Metric
+	for {
+		metric, ok := <-failureChan
+		if ok == false {
+			break
+		}
+		metric.Write(&counter)
+	}
+
+	return *counter.Counter.Value
 }
 
 func TestContentTypeRegex(t *testing.T) {
@@ -387,16 +434,23 @@ func TestSourceDisappeared(t *testing.T) {
 		URL:              ts.URL,
 		RefreshInterval:  model.Duration(1 * time.Second),
 	}
-	d, err := NewDiscovery(&cfg, log.NewNopLogger())
+
+	reg := prometheus.NewRegistry()
+	refreshMetrics := discovery.NewRefreshMetrics(reg)
+	defer refreshMetrics.Unregister()
+	metrics := cfg.NewDiscovererMetrics(reg, refreshMetrics)
+	require.NoError(t, metrics.Register())
+	defer metrics.Unregister()
+
+	d, err := NewDiscovery(&cfg, log.NewNopLogger(), nil, metrics)
 	require.NoError(t, err)
 	for _, test := range cases {
 		ctx := context.Background()
 		for i, res := range test.responses {
 			stubResponse = res
-			tgs, err := d.refresh(ctx)
+			tgs, err := d.Refresh(ctx)
 			require.NoError(t, err)
 			require.Equal(t, test.expectedTargets[i], tgs)
 		}
 	}
-
 }
