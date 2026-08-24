@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"path"
 	"time"
+	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/prom"
 	"tkestack.io/kvass/pkg/shard"
 	"tkestack.io/kvass/pkg/shard/static"
@@ -71,6 +72,7 @@ var cdCfg = struct {
 	rebalanceInterval            time.Duration
 	rebalanceHealthRateWatermark float64
 	forceRebalanceInterval       time.Duration
+	metricDropDir                string
 }{}
 
 type LocalFormatter struct {
@@ -114,6 +116,8 @@ func init() {
 		"config file path")
 	coordinatorCmd.Flags().StringVar(&cdCfg.httpHeadersBaseDir, "http-headers.base-dir", "/etc/prometheus/headers",
 		"base directory for http_headers files when loading config without a file path")
+	coordinatorCmd.Flags().StringVar(&cdCfg.metricDropDir, "metric-drop.file", metricdrop.DefaultDir,
+		"directory of idle-metric-drop ConfigMap; missing dir disables filtering")
 	coordinatorCmd.Flags().DurationVar(&cdCfg.syncInterval, "coordinator.interval", time.Second*10,
 		"the interval of coordinator loop")
 	coordinatorCmd.Flags().DurationVar(&cdCfg.sdInitTimeout, "sd.init-timeout", time.Minute*1,
@@ -169,6 +173,7 @@ distribution targets to shards`,
 			scrapeManager          = scrape.New(lg.WithField("component", "scrape discovery"))
 			targetDiscovery        = discovery.New(lg.WithField("component", "target discovery"))
 			exp                    = explore.New(scrapeManager, lg.WithField("component", "explore"))
+			dropSet                = metricdrop.NewSet(cdCfg.metricDropDir, "")
 			cfgManager             = prom.NewConfigManager()
 
 			cd = coordinator.NewCoordinator(
@@ -229,6 +234,16 @@ distribution targets to shards`,
 
 		lg.SetFormatter(LocalFormatter{&logrus.TextFormatter{}})
 		lg.Level = logLevel
+
+		exp.SetDropSet(func() *metricdrop.Snapshot { return dropSet.Load() })
+		dropSet.Reload()
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for range t.C {
+				dropSet.Reload()
+			}
+		}()
 
 		if err := cfgManager.ReloadFromFile(cdCfg.configFile); err != nil {
 			panic(err)

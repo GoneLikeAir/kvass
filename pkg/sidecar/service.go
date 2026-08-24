@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"tkestack.io/kvass/pkg/api"
+	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/prom"
 	"tkestack.io/kvass/pkg/shard"
 	"tkestack.io/kvass/pkg/utils/types"
@@ -42,6 +43,8 @@ type Service struct {
 	getHeadSeries func() (int64, error)
 	paths         []string
 	runHTTP       func(addr string, handler http.Handler) error
+	dropSet       *metricdrop.Set
+	proxy         *Proxy
 }
 
 // NewService create new api server of shard
@@ -88,6 +91,11 @@ func NewService(
 	return s
 }
 
+func (s *Service) SetDropRuntime(dropSet *metricdrop.Set, proxy *Proxy) {
+	s.dropSet = dropSet
+	s.proxy = proxy
+}
+
 func (s *Service) path(p string) string {
 	s.paths = append(s.paths, p)
 	return p
@@ -130,11 +138,25 @@ func (s *Service) runtimeInfo(g *gin.Context) *api.Result {
 	if series < min {
 		series = min
 	}
-	return api.Data(&shard.RuntimeInfo{
+	info := &shard.RuntimeInfo{
 		HeadSeries:  series,
 		ConfigHash:  s.cfgManager.ConfigInfo().ConfigHash,
 		IdleStartAt: targets.IdleAt,
-	})
+	}
+	if s.dropSet != nil {
+		snap := s.dropSet.Load()
+		info.DropSetHash = snap.Hash
+		info.DropSetEnabled = snap.Enabled
+		info.DropSetGeneration = snap.Generation
+		info.DropSetLastError = snap.LastError
+	}
+	if s.proxy != nil {
+		info.DropSetFailOpen = s.proxy.FailOpenCount()
+		if le := s.proxy.LastError(); le != "" {
+			info.DropSetLastError = le
+		}
+	}
+	return api.Data(info)
 }
 
 func (s *Service) updateTargets(g *gin.Context) *api.Result {

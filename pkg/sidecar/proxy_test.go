@@ -127,6 +127,7 @@ func TestProxy_ServeHTTP(t *testing.T) {
 				func() map[uint64]*target.ScrapeStatus {
 					return cs.status
 				},
+				nil,
 				logrus.New())
 
 			req := httptest.NewRequest(http.MethodGet, targetServer.URL+cs.uri, strings.NewReader(""))
@@ -164,6 +165,7 @@ func TestProxy_ForwardsHeaders(t *testing.T) {
 			return &scrape.JobInfo{Config: job, Cli: http.DefaultClient}
 		},
 		func() map[uint64]*target.ScrapeStatus { return map[uint64]*target.ScrapeStatus{1: {}} },
+		nil,
 		logrus.New(),
 	)
 

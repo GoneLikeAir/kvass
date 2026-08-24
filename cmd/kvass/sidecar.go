@@ -20,6 +20,8 @@ package main
 import (
 	"path"
 	"path/filepath"
+	"time"
+	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/scrape"
 	"tkestack.io/kvass/pkg/sidecar"
 	"tkestack.io/kvass/pkg/target"
@@ -41,6 +43,7 @@ var sidecarCfg = struct {
 	prometheusURL      string
 	storePath          string
 	injectProxyURL     string
+	metricDropDir      string
 	configInject       configInjectOption
 }{}
 
@@ -61,6 +64,8 @@ func init() {
 		"path to save shard runtime")
 	sidecarCmd.Flags().StringVar(&sidecarCfg.injectProxyURL, "inject.proxy", "http://127.0.0.1:8008",
 		"proxy url to inject to all job")
+	sidecarCmd.Flags().StringVar(&sidecarCfg.metricDropDir, "metric-drop.file", metricdrop.DefaultDir,
+		"directory of idle-metric-drop ConfigMap (generation/content-hash/enabled/names.gz); missing dir disables filtering")
 	sidecarCmd.Flags().StringVar(&sidecarCfg.configInject.kubernetes.serviceAccountPath, "inject.kubernetes-sa-path", "",
 		"change default service account token path")
 	rootCmd.AddCommand(sidecarCmd)
@@ -86,12 +91,14 @@ var sidecarCmd = &cobra.Command{
 				return sidecarCfg.httpHeadersBaseDir
 			}()
 
-			_     = scrape.InitMetricCollector(sidecarCfg.configOutFile)
-			proxy = sidecar.NewProxy(
+			_      = scrape.InitMetricCollector(sidecarCfg.configOutFile)
+			dropSet = metricdrop.NewSet(sidecarCfg.metricDropDir, path.Join(sidecarCfg.storePath, "metric-drop-set.json"))
+			proxy   = sidecar.NewProxy(
 				scrapeManager.GetJob,
 				func() map[uint64]*target.ScrapeStatus {
 					return targetManager.TargetsInfo().Status
 				},
+				func() *metricdrop.Snapshot { return dropSet.Load() },
 				log.WithField("component", "target manager"))
 
 			injector = sidecar.NewInjector(sidecarCfg.configOutFile, sidecar.InjectConfigOptions{
@@ -133,6 +140,15 @@ var sidecarCmd = &cobra.Command{
 			targetManager,
 			log.WithField("component", "web"),
 		)
+		service.SetDropRuntime(dropSet, proxy)
+		dropSet.Reload()
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for range t.C {
+				dropSet.Reload()
+			}
+		}()
 
 		if sidecarCfg.configFile != "" {
 			if err := configManager.ReloadFromFile(sidecarCfg.configFile); err != nil {

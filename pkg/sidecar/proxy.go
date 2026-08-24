@@ -25,7 +25,9 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/scrape"
 	"tkestack.io/kvass/pkg/target"
 
@@ -39,6 +41,9 @@ type Proxy struct {
 	targetsLock sync.Mutex
 	getJob      func(jobName string) *scrape.JobInfo
 	getStatus   func() map[uint64]*target.ScrapeStatus
+	getDropSet  func() *metricdrop.Snapshot
+	failOpen    atomic.Uint64
+	lastError   atomic.Value
 	log         logrus.FieldLogger
 }
 
@@ -46,12 +51,26 @@ type Proxy struct {
 func NewProxy(
 	getJob func(jobName string) *scrape.JobInfo,
 	getStatus func() map[uint64]*target.ScrapeStatus,
+	getDropSet func() *metricdrop.Snapshot,
 	log logrus.FieldLogger) *Proxy {
-	return &Proxy{
-		getJob:    getJob,
-		getStatus: getStatus,
-		log:       log,
+	if getDropSet == nil {
+		getDropSet = func() *metricdrop.Snapshot { return nil }
 	}
+	p := &Proxy{
+		getJob:     getJob,
+		getStatus:  getStatus,
+		getDropSet: getDropSet,
+		log:        log,
+	}
+	p.lastError.Store("")
+	return p
+}
+
+func (p *Proxy) FailOpenCount() uint64 { return p.failOpen.Load() }
+
+func (p *Proxy) LastError() string {
+	v, _ := p.lastError.Load().(string)
+	return v
 }
 
 // Run start Proxy server and block
@@ -96,15 +115,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	series, _, err := scrape.StatisticSeries(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs)
-	if err != nil {
-		scrapErr = fmt.Errorf("StatisticSeries failed %v", err)
-		return
+	dropSet := p.getDropSet()
+	out, series, bodySize, failOpen, ferr := scrape.FilterAndStat(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs, dropSet)
+	if ferr != nil {
+		failOpen = true
+		out = data
+		bodySize = int64(len(data))
+		p.lastError.Store(ferr.Error())
+		p.log.Errorf("metric drop rewrite failed, fail-open: %v", ferr)
+	}
+	if failOpen {
+		p.failOpen.Add(1)
+		if ferr == nil {
+			p.lastError.Store("protobuf or parse fail-open")
+		}
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	// send origin result to prometheus
-	if _, err := io.Copy(w, bytes.NewBuffer(data)); err != nil {
+	if _, err := io.Copy(w, bytes.NewBuffer(out)); err != nil {
 		scrapErr = fmt.Errorf("copy data to prometheus failed %v", err)
 		if time.Now().Sub(start) > time.Duration(jobInfo.Config.ScrapeTimeout) {
 			scrapErr = fmt.Errorf("scrape timeout")
@@ -114,6 +142,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if tar != nil {
 		tar.UpdateSeries(series)
+		tar.BodySize = bodySize
 	}
 }
 

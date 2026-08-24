@@ -44,6 +44,16 @@ type RuntimeInfo struct {
 	ConfigHash string `json:"ConfigHash"`
 	// IdleStartAt is the time that shard begin idle
 	IdleStartAt *time.Time `json:"IdleStartAt,omitempty"`
+	// DropSetHash is sha256 of the loaded idle-drop name list
+	DropSetHash string `json:"dropSetHash,omitempty"`
+	// DropSetEnabled is whether idle-drop filtering is active
+	DropSetEnabled bool `json:"dropSetEnabled"`
+	// DropSetGeneration is the loaded drop-set generation
+	DropSetGeneration string `json:"dropSetGeneration,omitempty"`
+	// DropSetFailOpen counts rewrite failures that forwarded the original body
+	DropSetFailOpen uint64 `json:"dropSetFailOpen"`
+	// DropSetLastError is the last drop-set load or rewrite error
+	DropSetLastError string `json:"dropSetLastError,omitempty"`
 }
 
 // UpdateTargetsRequest contains all information about the targets updating request

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"tkestack.io/kvass/pkg/discovery"
+	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/prom"
 	"tkestack.io/kvass/pkg/scrape"
 	"tkestack.io/kvass/pkg/utils/types"
@@ -52,6 +53,8 @@ type Explore struct {
 	retryInterval time.Duration
 	needExplore   chan *exploringTarget
 	explore       func(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error)
+	getDropSet    func() *metricdrop.Snapshot
+	lastDropHash  string
 }
 
 // New create a new Explore
@@ -66,11 +69,38 @@ func New(scrapeManager *scrape.Manager, log logrus.FieldLogger) *Explore {
 	}
 }
 
+func (e *Explore) SetDropSet(get func() *metricdrop.Snapshot) {
+	e.getDropSet = get
+	e.explore = func(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error) {
+		return exploreWithDrop(scrapeInfo, URL, url, get)
+	}
+}
+
 // Get return the target scrape status of the target by hash
 // if target is never explored, it will be send to explore
+func (e *Explore) invalidateIfDropChanged() {
+	hash := ""
+	if e.getDropSet != nil {
+		if snap := e.getDropSet(); snap != nil {
+			hash = snap.Hash + ":" + snap.Generation
+			if !snap.Enabled {
+				hash = "disabled:" + snap.Hash
+			}
+		}
+	}
+	if hash == e.lastDropHash {
+		return
+	}
+	e.lastDropHash = hash
+	for _, t := range e.targets {
+		t.exploring = false
+	}
+}
+
 func (e *Explore) Get(hash uint64) *target.ScrapeStatus {
 	e.targetsLock.Lock()
 	defer e.targetsLock.Unlock()
+	e.invalidateIfDropChanged()
 
 	r := e.targets[hash]
 	if r == nil {
@@ -185,9 +215,23 @@ func (e *Explore) exploreOnce(ctx context.Context, t *exploringTarget) (err erro
 }
 
 func explore(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error) {
-	data, typ, err := scrapeInfo.Scrape(URL.String(), nil)
+	return exploreWithDrop(scrapeInfo, URL, url, nil)
+}
+
+func exploreWithDrop(scrapeInfo *scrape.JobInfo, URL *url.URL, url string, get func() *metricdrop.Snapshot) (int64, int64, error) {
+	data, typ, err := scrapeInfo.Scrape(url, nil)
 	if err != nil {
 		return 0, 0, err
 	}
-	return scrape.StatisticSeries(scrapeInfo.Config.JobName, URL, data, typ, scrapeInfo.Config.MetricRelabelConfigs)
+	var snap *metricdrop.Snapshot
+	if get != nil {
+		snap = get()
+	}
+	out, series, bodySize, _, ferr := scrape.FilterAndStat(scrapeInfo.Config.JobName, URL, data, typ, scrapeInfo.Config.MetricRelabelConfigs, snap)
+	_ = out
+	if ferr != nil {
+		series2, body2, serr := scrape.StatisticSeries(scrapeInfo.Config.JobName, URL, data, typ, scrapeInfo.Config.MetricRelabelConfigs)
+		return series2, body2, serr
+	}
+	return series, bodySize, nil
 }
