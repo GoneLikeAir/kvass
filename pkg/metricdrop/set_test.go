@@ -3,6 +3,7 @@ package metricdrop
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,13 @@ func TestSet_DisableOverridesStore(t *testing.T) {
 	if s.Load().Enabled || s.Load().Contains("idle_metric") {
 		t.Fatal("disable must clear set")
 	}
+	b, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"enabled":false`) {
+		t.Fatalf("disable must overwrite store: %s", b)
+	}
 }
 
 func TestSet_IncompleteDirKeepsPrevious(t *testing.T) {
@@ -86,5 +94,51 @@ func TestSet_IncompleteDirKeepsPrevious(t *testing.T) {
 	}
 	if s.Load().LastError == "" {
 		t.Fatal("expected last error")
+	}
+}
+
+func TestSet_MissingNamesGZKeepsPrevious(t *testing.T) {
+	dir := t.TempDir()
+	dropDir := filepath.Join(dir, "drop")
+	_ = os.MkdirAll(dropDir, 0755)
+	s := NewSet(dropDir, filepath.Join(dir, "store.json"))
+	gz, _ := GzipNames([]string{"idle_metric"})
+	_ = os.WriteFile(filepath.Join(dropDir, FileEnabled), []byte("true\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dropDir, FileNamesGZ), gz, 0644)
+	s.Reload()
+	if !s.Load().Contains("idle_metric") {
+		t.Fatal("setup")
+	}
+	_ = os.Remove(filepath.Join(dropDir, FileNamesGZ))
+	s.Reload()
+	if !s.Load().Contains("idle_metric") {
+		t.Fatal("missing names.gz must keep previous enabled set")
+	}
+	if s.Load().LastError == "" {
+		t.Fatal("expected last error")
+	}
+}
+
+func TestSet_IncompleteDirReadsStoreAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	dropDir := filepath.Join(dir, "drop")
+	store := filepath.Join(dir, "store.json")
+	_ = os.MkdirAll(dropDir, 0755)
+	first := NewSet(dropDir, store)
+	gz, _ := GzipNames([]string{"idle_metric"})
+	_ = os.WriteFile(filepath.Join(dropDir, FileEnabled), []byte("true\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dropDir, FileNamesGZ), gz, 0644)
+	first.Reload()
+	if !first.Load().Contains("idle_metric") {
+		t.Fatal("setup")
+	}
+	_ = os.WriteFile(filepath.Join(dropDir, FileNamesGZ), []byte("not-gzip"), 0644)
+	restarted := NewSet(dropDir, store)
+	restarted.Reload()
+	if !restarted.Load().Contains("idle_metric") {
+		t.Fatal("restart with incomplete dir must load previous store")
+	}
+	if restarted.Load().LastError == "" {
+		t.Fatal("expected last error from incomplete dir")
 	}
 }

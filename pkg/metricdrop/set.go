@@ -85,6 +85,11 @@ func (s *Set) Reload() {
 			s.cur.Store(&cp)
 			return
 		}
+		if stored := s.readStore(); stored != nil && stored.Enabled && len(stored.Names) > 0 {
+			stored.LastError = err.Error()
+			s.cur.Store(stored)
+			return
+		}
 		empty := emptySnapshot()
 		empty.LastError = err.Error()
 		s.cur.Store(empty)
@@ -92,6 +97,49 @@ func (s *Set) Reload() {
 	}
 	s.cur.Store(snap)
 	_ = s.writeStore(snap)
+}
+
+func (s *Set) readStore() *Snapshot {
+	if s == nil || s.store == "" {
+		return nil
+	}
+	b, err := os.ReadFile(s.store)
+	if err != nil {
+		return nil
+	}
+	var payload struct {
+		Enabled    bool   `json:"enabled"`
+		Generation string `json:"generation"`
+		Hash       string `json:"hash"`
+		NamesGZ    []byte `json:"names_gz"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return nil
+	}
+	if !payload.Enabled {
+		return nil
+	}
+	names := map[string]struct{}{}
+	if len(payload.NamesGZ) > 0 {
+		parsed, err := UngzipNames(payload.NamesGZ)
+		if err != nil {
+			return nil
+		}
+		for _, n := range parsed {
+			if n != "" {
+				names[n] = struct{}{}
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return &Snapshot{
+		Enabled:    true,
+		Generation: payload.Generation,
+		Hash:       payload.Hash,
+		Names:      names,
+	}
 }
 
 func (s *Set) writeStore(snap *Snapshot) error {
@@ -129,11 +177,11 @@ func loadDir(dir string) (*Snapshot, error) {
 	gen, _ := os.ReadFile(filepath.Join(dir, FileGeneration))
 	hash, _ := os.ReadFile(filepath.Join(dir, FileContentHash))
 	gz, err := os.ReadFile(filepath.Join(dir, FileNamesGZ))
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
 	names := map[string]struct{}{}
-	if enabled && len(gz) > 0 {
+	if enabled {
+		if err != nil {
+			return nil, err
+		}
 		parsed, err := UngzipNames(gz)
 		if err != nil {
 			return nil, err

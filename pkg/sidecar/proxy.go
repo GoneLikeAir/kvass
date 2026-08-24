@@ -115,18 +115,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dropSet := p.getDropSet()
-	out, series, bodySize, failOpen, ferr := scrape.FilterAndStat(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs, dropSet)
-	if ferr != nil {
-		failOpen = true
-		out = data
-		bodySize = int64(len(data))
-		p.lastError.Store(ferr.Error())
-		p.log.Errorf("metric drop rewrite failed, fail-open: %v", ferr)
-	}
+	var (
+		out      []byte
+		series   int64
+		bodySize int64
+		failOpen bool
+		ferr     error
+	)
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				failOpen = true
+				out = data
+				bodySize = int64(len(data))
+				ferr = fmt.Errorf("panic: %v", rec)
+				p.lastError.Store(ferr.Error())
+				p.log.Errorf("metric drop rewrite panic, fail-open: %v", rec)
+			}
+		}()
+		dropSet := p.getDropSet()
+		out, series, bodySize, failOpen, ferr = scrape.FilterAndStat(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs, dropSet)
+		if ferr != nil {
+			failOpen = true
+			out = data
+			bodySize = int64(len(data))
+			p.lastError.Store(ferr.Error())
+			p.log.Errorf("metric drop rewrite failed, fail-open: %v", ferr)
+		}
+	}()
 	if failOpen {
 		p.failOpen.Add(1)
-		if ferr == nil {
+		if p.LastError() == "" {
 			p.lastError.Store("protobuf or parse fail-open")
 		}
 	}

@@ -15,6 +15,15 @@ import (
 
 // FilterAndStat rewrites scrape payload in one parse, dropping names in dropSet.
 func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string, rc []*relabel.Config, dropSet *metricdrop.Snapshot) (out []byte, series int64, bodySize int64, failOpen bool, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			out = raw
+			series = 0
+			bodySize = int64(len(raw))
+			failOpen = true
+			err = nil
+		}
+	}()
 	ct := strings.ToLower(contentType)
 	if strings.Contains(ct, "protobuf") || strings.Contains(ct, "delimited") {
 		return raw, 0, int64(len(raw)), true, nil
@@ -145,14 +154,18 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 				_ = ts
 			} else {
 				sb, ts, val := p.Series()
-				outBuf.Write(sb)
-				outBuf.WriteByte(' ')
-				outBuf.WriteString(strconv.FormatFloat(val, 'g', -1, 64))
-				if ts != nil {
+				if line := originalSeriesLine(raw, sb); len(line) > 0 {
+					writeNL(line)
+				} else {
+					outBuf.Write(sb)
 					outBuf.WriteByte(' ')
-					outBuf.WriteString(strconv.FormatInt(*ts, 10))
+					outBuf.WriteString(strconv.FormatFloat(val, 'g', -1, 64))
+					if ts != nil {
+						outBuf.WriteByte(' ')
+						outBuf.WriteString(strconv.FormatInt(*ts, 10))
+					}
+					outBuf.WriteByte('\n')
 				}
-				outBuf.WriteByte('\n')
 			}
 			lset, keep := relabel.Process(lset, rc...)
 			if keep {
@@ -162,6 +175,33 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 		}
 	}
 
+	if bytes.Contains(raw, []byte("# EOF")) && !bytes.Contains(outBuf.Bytes(), []byte("# EOF")) {
+		outBuf.WriteString("# EOF\n")
+	}
 	result := outBuf.Bytes()
 	return result, series, int64(len(result)), false, nil
+}
+
+func originalSeriesLine(raw, series []byte) []byte {
+	if len(series) == 0 {
+		return nil
+	}
+	needle := make([]byte, 0, len(series)+2)
+	needle = append(needle, '\n')
+	needle = append(needle, series...)
+	needle = append(needle, ' ')
+	idx := bytes.Index(raw, needle)
+	start := 0
+	if idx >= 0 {
+		start = idx + 1
+	} else if bytes.HasPrefix(raw, series) && (len(raw) == len(series) || raw[len(series)] == ' ' || raw[len(series)] == '\n') {
+		start = 0
+	} else {
+		return nil
+	}
+	end := bytes.IndexByte(raw[start:], '\n')
+	if end < 0 {
+		return raw[start:]
+	}
+	return raw[start : start+end]
 }

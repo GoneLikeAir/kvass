@@ -40,12 +40,32 @@ func TestFilterAndStat_OmitsHelpForFullyDropped(t *testing.T) {
 
 func TestFilterAndStat_PreservesRawSampleBytes(t *testing.T) {
 	raw := []byte("keep_metric 2 1234567890\n")
-	out, _, _, _, err := FilterAndStat("job", nil, raw, "text/plain", nil, &metricdrop.Snapshot{})
+	set := &metricdrop.Snapshot{Enabled: true, Names: map[string]struct{}{"other_idle": {}}}
+	out, _, _, _, err := FilterAndStat("job", nil, raw, "text/plain", nil, set)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), "keep_metric 2 1234567890") {
 		t.Fatalf("timestamp bytes lost: %s", out)
+	}
+}
+
+func TestFilterAndStat_OpenMetricsKeepsEOFAndOriginalValue(t *testing.T) {
+	raw := []byte("# TYPE keep_metric gauge\nkeep_metric 2.0\nidle_metric 1\n# EOF\n")
+	set := &metricdrop.Snapshot{Enabled: true, Names: map[string]struct{}{"idle_metric": {}}}
+	out, _, _, failOpen, err := FilterAndStat("job", nil, raw, "application/openmetrics-text; version=0.0.1", nil, set)
+	if err != nil || failOpen {
+		t.Fatalf("err=%v failOpen=%v", err, failOpen)
+	}
+	body := string(out)
+	if !strings.Contains(body, "# EOF") {
+		t.Fatalf("openmetrics rewrite must keep # EOF: %s", body)
+	}
+	if !strings.Contains(body, "keep_metric 2.0") {
+		t.Fatalf("original sample bytes lost: %s", body)
+	}
+	if strings.Contains(body, "idle_metric 1") {
+		t.Fatalf("dropped sample still present: %s", body)
 	}
 }
 

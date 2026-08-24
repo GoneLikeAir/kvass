@@ -1,9 +1,11 @@
 package explore
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -18,7 +20,7 @@ import (
 )
 
 func TestExplore_UsesFilteredSeries(t *testing.T) {
-	body := "idle_metric 1\nkeep_metric 2\n"
+	body := "# HELP idle_metric x\n# TYPE idle_metric gauge\nidle_metric 1\nkeep_metric 2\n"
 	hts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(body))
 	}))
@@ -52,19 +54,31 @@ func TestExplore_UsesFilteredSeries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	g1out, _, g1size, _, err := scrape.FilterAndStat("job1", parsed, []byte(body), "text/plain", nil, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if series2 != 1 {
 		t.Fatalf("filtered series=%d", series2)
 	}
-	if bodySize2 >= bodySize && series2 == series {
-		t.Fatalf("expected smaller filtered body")
+	if bodySize2 != g1size {
+		t.Fatalf("bodySize=%d want G1 size %d out=%q", bodySize2, g1size, g1out)
 	}
 	e.UpdateTargets(map[string][]*discovery.SDTargets{
 		"job1": {{ShardTarget: &target.Target{Hash: 1}}},
 	})
 	e.targets[1].exploring = true
 	e.lastDropHash = "old"
-	_ = e.Get(1)
+	st := e.Get(1)
 	if e.lastDropHash == "old" {
 		t.Fatal("drop-set hash change must invalidate explore cache")
+	}
+	if e.targets[1].exploring == false {
+		t.Fatal("Get after hash change must re-queue explore")
+	}
+	_ = st
+	if dir := os.Getenv("LAND_EVIDENCE"); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+		_ = os.WriteFile(dir+"/g4-explore.txt", []byte(fmt.Sprintf("series=%d bodySize=%d g1BodySize=%d firstBodySize=%d\n", series2, bodySize2, g1size, bodySize)), 0644)
 	}
 }

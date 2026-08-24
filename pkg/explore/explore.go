@@ -59,21 +59,21 @@ type Explore struct {
 
 // New create a new Explore
 func New(scrapeManager *scrape.Manager, log logrus.FieldLogger) *Explore {
-	return &Explore{
+	e := &Explore{
 		logger:        log,
 		scrapeManager: scrapeManager,
 		needExplore:   make(chan *exploringTarget, 10000),
 		retryInterval: time.Second * 5,
 		targets:       map[uint64]*exploringTarget{},
-		explore:       explore,
 	}
+	e.explore = func(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error) {
+		return exploreWithDrop(scrapeInfo, URL, url, e.getDropSet)
+	}
+	return e
 }
 
 func (e *Explore) SetDropSet(get func() *metricdrop.Snapshot) {
 	e.getDropSet = get
-	e.explore = func(scrapeInfo *scrape.JobInfo, URL *url.URL, url string) (int64, int64, error) {
-		return exploreWithDrop(scrapeInfo, URL, url, get)
-	}
 }
 
 // Get return the target scrape status of the target by hash
