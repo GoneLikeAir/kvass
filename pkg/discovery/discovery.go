@@ -20,6 +20,7 @@ package discovery
 import (
 	"context"
 	"github.com/prometheus/prometheus/config"
+	"github.com/prometheus/prometheus/model/labels"
 	"sync"
 	"time"
 	"tkestack.io/kvass/pkg/prom"
@@ -169,6 +170,7 @@ func (m *TargetsDiscovery) translateTargets(targets map[string][]*targetgroup.Gr
 	defer m.targetsLock.Unlock()
 
 	res := map[string][]*SDTargets{}
+	scratch := labels.NewScratchBuilder(0)
 	for job, tsg := range targets {
 		allActive := make([]*SDTargets, 0)
 		allDrop := make([]*SDTargets, 0)
@@ -187,7 +189,7 @@ func (m *TargetsDiscovery) translateTargets(targets map[string][]*targetgroup.Gr
 			}
 
 			for _, tar := range ts {
-				if tar.PromTarget.Labels().Len() > 0 {
+				if tar.PromTarget.Labels(&scratch).Len() > 0 {
 					allActive = append(allActive, tar)
 				} else if tar.PromTarget.DiscoveredLabels().Len() > 0 {
 					allDrop = append(allDrop, tar)

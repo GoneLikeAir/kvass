@@ -1,6 +1,7 @@
 package scrape
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,5 +81,36 @@ func TestFilterAndStat_ProtobufFailOpen(t *testing.T) {
 	}
 	if string(out) != string(raw) {
 		t.Fatal("must forward original")
+	}
+}
+
+func TestFilterAndStat_PreservesRepeatedSeriesSamples(t *testing.T) {
+	raw := []byte("keep_metric{instance=\"a\"} 1.0 1000\nkeep_metric{instance=\"a\"} 2.0 2000\n")
+	set := &metricdrop.Snapshot{Enabled: true, Names: map[string]struct{}{"idle_metric": {}}}
+	out, series, _, failOpen, err := FilterAndStat("job", nil, raw, "text/plain", nil, set)
+	if err != nil || failOpen || series != 2 || string(out) != string(raw) {
+		t.Fatalf("sample values/timestamps changed: out=%q series=%d failOpen=%v err=%v", out, series, failOpen, err)
+	}
+}
+
+func BenchmarkFilterAndStat_LargeScrape(b *testing.B) {
+	for _, count := range []int{1000, 10000, 50000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			var input strings.Builder
+			for i := 0; i < count; i++ {
+				fmt.Fprintf(&input, "keep_metric{instance=\"target-%d\",description=\"abcdefghijklmnopqrstuvwxyz0123456789\"} 1.0\n", i)
+			}
+			raw := []byte(input.String())
+			set := &metricdrop.Snapshot{Enabled: true, Names: map[string]struct{}{"idle_metric": {}}}
+			b.SetBytes(int64(len(raw)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for n := 0; n < b.N; n++ {
+				_, _, _, _, err := FilterAndStat("job", nil, raw, "text/plain", nil, set)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

@@ -51,6 +51,9 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 	emittedMeta := map[string]bool{}
 	kept := map[string]bool{}
 	outBuf := bytes.NewBuffer(make([]byte, 0, len(raw)))
+	// Advance through the input once; rescanning from the beginning for each
+	// sample is quadratic and can select a different sample with identical labels.
+	lineOffset := 0
 
 	writeNL := func(b []byte) {
 		outBuf.Write(b)
@@ -154,7 +157,9 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 				_ = ts
 			} else {
 				sb, ts, val := p.Series()
-				if line := originalSeriesLine(raw, sb); len(line) > 0 {
+				line, consumed := originalSeriesLine(raw[lineOffset:], sb)
+				lineOffset += consumed
+				if len(line) > 0 {
 					writeNL(line)
 				} else {
 					outBuf.Write(sb)
@@ -182,26 +187,24 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 	return result, series, int64(len(result)), false, nil
 }
 
-func originalSeriesLine(raw, series []byte) []byte {
-	if len(series) == 0 {
-		return nil
+func originalSeriesLine(raw, series []byte) ([]byte, int) {
+	consumed := 0
+	for len(raw) > 0 {
+		end := bytes.IndexByte(raw, '\n')
+		if end < 0 {
+			end = len(raw)
+		}
+		line := raw[:end]
+		next := end
+		if next < len(raw) {
+			next++
+		}
+		consumed += next
+		candidate := bytes.TrimLeft(line, " \t")
+		if len(series) > 0 && bytes.HasPrefix(candidate, series) && len(candidate) > len(series) && (candidate[len(series)] == ' ' || candidate[len(series)] == '\t') {
+			return line, consumed
+		}
+		raw = raw[next:]
 	}
-	needle := make([]byte, 0, len(series)+2)
-	needle = append(needle, '\n')
-	needle = append(needle, series...)
-	needle = append(needle, ' ')
-	idx := bytes.Index(raw, needle)
-	start := 0
-	if idx >= 0 {
-		start = idx + 1
-	} else if bytes.HasPrefix(raw, series) && (len(raw) == len(series) || raw[len(series)] == ' ' || raw[len(series)] == '\n') {
-		start = 0
-	} else {
-		return nil
-	}
-	end := bytes.IndexByte(raw[start:], '\n')
-	if end < 0 {
-		return raw[start:]
-	}
-	return raw[start : start+end]
+	return nil, consumed
 }

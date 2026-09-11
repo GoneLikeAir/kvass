@@ -479,6 +479,8 @@ type RelabelConfig struct {
 //	return cfg, nil
 //}
 
+type ScrapeProtocol string
+
 type ScrapeConfig struct {
 	// The job name to which the job label is set by default.
 	JobName string `yaml:"job_name" json:"job_name"`
@@ -486,16 +488,22 @@ type ScrapeConfig struct {
 	HonorLabels bool `yaml:"honor_labels,omitempty" json:"honor_labels,omitempty"`
 	// Indicator whether the scraped timestamps should be respected.
 	HonorTimestamps bool `yaml:"honor_timestamps" json:"honor_timestamps"`
+	// Indicator whether to track the staleness of scraped timestamps.
+	TrackTimestampsStaleness bool `yaml:"track_timestamps_staleness" json:"track_timestamps_staleness"`
 	// A set of query parameters with which the target is scraped.
 	Params map[string][]string `yaml:"params,omitempty" json:"params,omitempty"`
 	// How frequently to scrape the targets of this scrape config.
 	ScrapeInterval model.Duration `yaml:"scrape_interval,omitempty" json:"scrape_interval_sec,omitempty"`
 	// The timeout for scraping targets of this config.
 	ScrapeTimeout model.Duration `yaml:"scrape_timeout,omitempty" json:"scrape_timeout_sec,omitempty"`
+	// The protocols to negotiate during a scrape, ordered by priority.
+	ScrapeProtocols []ScrapeProtocol `yaml:"scrape_protocols,omitempty" json:"scrape_protocols,omitempty"`
 	// The HTTP resource path on which to fetch metrics from targets.
 	MetricsPath string `yaml:"metrics_path,omitempty" json:"metrics_path,omitempty"`
 	// The URL scheme with which to fetch metrics from targets.
 	Scheme string `yaml:"scheme,omitempty" json:"scheme,omitempty"`
+	// Indicator whether to request compressed response from the target.
+	EnableCompression bool `yaml:"enable_compression" json:"enable_compression"`
 	// More than this many samples post metric-relabeling will cause the scrape to fail.
 	SampleLimit uint `yaml:"sample_limit,omitempty" json:"sample_limit,omitempty"`
 	// More than this many targets after the target relabeling will cause the
@@ -554,9 +562,14 @@ type AlertmanagerConfig struct {
 	RelabelConfigs []*RelabelConfig `yaml:"relabel_configs,omitempty"`
 }
 
+type RuntimeConfig struct {
+	GoGC int `yaml:"gogc,omitempty" json:"gogc,omitempty"`
+}
+
 type PromConfig struct {
 	IsDefault          bool                 `yaml:"-" json:"-"`
 	GlobalConfig       GlobalCfg            `yaml:"global" json:"global"`
+	Runtime            RuntimeConfig        `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	RuleFiles          []string             `yaml:"rule_files,omitempty" json:"rule_files,omitempty"`
 	ScrapeConfigs      []*ScrapeConfig      `yaml:"scrape_configs,omitempty" json:"scrape_configs,omitempty"`
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty" json:"remote_write,omitempty"`
@@ -567,6 +580,7 @@ type PromConfig struct {
 type GlobalCfg struct {
 	ScrapeInterval     model.Duration    `yaml:"scrape_interval,omitempty" json:"scrape_interval,omitempty"`
 	ScrapeTimeout      model.Duration    `yaml:"scrape_timeout,omitempty" json:"scrape_timeout,omitempty"`
+	ScrapeProtocols    []ScrapeProtocol  `yaml:"scrape_protocols,omitempty" json:"scrape_protocols,omitempty"`
 	EvaluationInterval model.Duration    `yaml:"evaluation_interval,omitempty" json:"evaluation_interval,omitempty"`
 	ExternalLabels     map[string]string `yaml:"external_labels,omitempty" json:"external_labels,omitempty"`
 	QueryLogFile       string            `yaml:"query_log_file,omitempty" json:"query_log_file,omitempty"`
@@ -816,7 +830,8 @@ type SelectorConfig struct {
 }
 
 type NamespaceDiscovery struct {
-	Names []string `yaml:"names,omitempty"`
+	IncludeOwnNamespace bool     `yaml:"own_namespace" json:"own_namespace"`
+	Names               []string `yaml:"names,omitempty"`
 }
 
 type K8sSDConfig struct {
