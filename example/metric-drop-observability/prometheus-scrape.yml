@@ -1,0 +1,32 @@
+# Example scrape config for kvass sidecar fail-open counters.
+# Sidecar API listen address defaults to :8080. This job must be added to a
+# Prometheus (or equivalent) scrape config as a separate deployment step;
+# shipping these files does not enable collection.
+#
+# Do not scrape sidecar /metrics for this job: that path reverse-proxies the
+# embedded Prometheus process.
+
+scrape_configs:
+  - job_name: kvass-sidecar-fail-open
+    metrics_path: /api/v1/shard/metrics/
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 127.0.0.1:8080
+
+  # Minimal Kubernetes SD alternative. Keep only sidecar API port 8080.
+  # Uncomment and adjust the keep regex to the real pod label.
+  #
+  # - job_name: kvass-sidecar-fail-open
+  #   metrics_path: /api/v1/shard/metrics/
+  #   scrape_interval: 15s
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     - source_labels: [__meta_kubernetes_pod_label_app]
+  #       regex: kvass
+  #       action: keep
+  #     - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_container_port_number]
+  #       regex: (.+);8080
+  #       replacement: $1:8080
+  #       target_label: __address__

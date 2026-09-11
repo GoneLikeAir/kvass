@@ -69,6 +69,7 @@ func NewService(
 
 	pprof.Register(s.ginEngine)
 	s.ginEngine.GET(s.path("/api/v1/shard/runtimeinfo/"), api.Wrap(s.lg, s.runtimeInfo))
+	s.ginEngine.GET(s.path("/api/v1/shard/metrics/"), s.serveFailOpenMetrics)
 	s.ginEngine.GET(s.path("/api/v1/shard/targets/"), api.Wrap(s.lg, func(ctx *gin.Context) *api.Result {
 		return api.Data(s.targetManager.TargetsInfo().Status)
 	}))
@@ -102,6 +103,13 @@ func (s *Service) path(p string) string {
 }
 
 func (s *Service) ServeHTTP(wt http.ResponseWriter, r *http.Request) {
+	// Keep Prometheus reverse-proxy on /metrics even after registering
+	// /api/v1/shard/metrics/, which would otherwise match as a substring.
+	if r.URL.Path == "/metrics" || r.URL.Path == "/metrics/" {
+		u, _ := url.Parse(s.promURL)
+		reverseproxy.NewReverseProxy(u).ServeHTTP(wt, r)
+		return
+	}
 	if types.FindStringVague(r.URL.Path, s.paths...) {
 		s.ginEngine.ServeHTTP(wt, r)
 		return
@@ -109,6 +117,15 @@ func (s *Service) ServeHTTP(wt http.ResponseWriter, r *http.Request) {
 
 	u, _ := url.Parse(s.promURL)
 	reverseproxy.NewReverseProxy(u).ServeHTTP(wt, r)
+}
+
+func (s *Service) serveFailOpenMetrics(c *gin.Context) {
+	if s.proxy == nil || s.proxy.MetricsHandler() == nil {
+		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		c.Status(http.StatusOK)
+		return
+	}
+	s.proxy.MetricsHandler().ServeHTTP(c.Writer, c.Request)
 }
 
 // Run start Service at "address"
@@ -149,10 +166,17 @@ func (s *Service) runtimeInfo(g *gin.Context) *api.Result {
 		info.DropSetEnabled = snap.Enabled
 		info.DropSetGeneration = snap.Generation
 		info.DropSetLastError = snap.LastError
+		info.DropSetLoadError = snap.LastError
 	}
 	if s.proxy != nil {
-		info.DropSetFailOpen = s.proxy.FailOpenCount()
-		if le := s.proxy.LastError(); le != "" {
+		total, byReason, last, le := s.proxy.FailOpenSnapshot()
+		info.DropSetFailOpen = total
+		info.DropSetFailOpenByReason = byReason
+		if !last.Time.IsZero() {
+			cp := last
+			info.DropSetLastFailure = &cp
+		}
+		if le != "" {
 			info.DropSetLastError = le
 		}
 	}

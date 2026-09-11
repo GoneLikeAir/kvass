@@ -25,7 +25,6 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 	"tkestack.io/kvass/pkg/metricdrop"
 	"tkestack.io/kvass/pkg/scrape"
@@ -38,13 +37,15 @@ import (
 // Proxy will return an empty metrics if this target if not allowed to scrape for this prometheus client
 // otherwise, Proxy do real tManager, statistic metrics samples and return metrics to prometheus
 type Proxy struct {
-	targetsLock sync.Mutex
-	getJob      func(jobName string) *scrape.JobInfo
-	getStatus   func() map[uint64]*target.ScrapeStatus
-	getDropSet  func() *metricdrop.Snapshot
-	failOpen    atomic.Uint64
-	lastError   atomic.Value
-	log         logrus.FieldLogger
+	targetsLock    sync.Mutex
+	getJob         func(jobName string) *scrape.JobInfo
+	getStatus      func() map[uint64]*target.ScrapeStatus
+	getDropSet     func() *metricdrop.Snapshot
+	failOpen       *failOpenState
+	log            logrus.FieldLogger
+	now            func() time.Time
+	logLimiter     *failOpenLogLimiter
+	metricsHandler http.Handler
 }
 
 // NewProxy create a new proxy server
@@ -60,17 +61,25 @@ func NewProxy(
 		getJob:     getJob,
 		getStatus:  getStatus,
 		getDropSet: getDropSet,
+		failOpen:   newFailOpenState(),
 		log:        log,
+		now:        time.Now,
 	}
-	p.lastError.Store("")
+	p.logLimiter = newFailOpenLogLimiter(func() time.Time { return p.now() })
+	_, p.metricsHandler = newFailOpenMetrics(p)
 	return p
 }
 
-func (p *Proxy) FailOpenCount() uint64 { return p.failOpen.Load() }
+func (p *Proxy) FailOpenCount() uint64 {
+	p.failOpen.mu.RLock()
+	defer p.failOpen.mu.RUnlock()
+	return p.failOpen.total
+}
 
 func (p *Proxy) LastError() string {
-	v, _ := p.lastError.Load().(string)
-	return v
+	p.failOpen.mu.RLock()
+	defer p.failOpen.mu.RUnlock()
+	return p.failOpen.lastError
 }
 
 // Run start Proxy server and block
@@ -120,34 +129,37 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		series   int64
 		bodySize int64
 		failOpen bool
-		ferr     error
+		reason   string
+		dropSet  *metricdrop.Snapshot
 	)
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
+				_ = rec
 				failOpen = true
+				reason = scrape.FailOpenReasonInternalPanic
 				out = data
 				bodySize = int64(len(data))
-				ferr = fmt.Errorf("panic: %v", rec)
-				p.lastError.Store(ferr.Error())
-				p.log.Errorf("metric drop rewrite panic, fail-open: %v", rec)
 			}
 		}()
-		dropSet := p.getDropSet()
-		out, series, bodySize, failOpen, ferr = scrape.FilterAndStat(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs, dropSet)
-		if ferr != nil {
+		dropSet = p.getDropSet()
+		outcome := scrape.FilterAndStatOutcome(jobInfo.Config.JobName, &realURL, data, contentType, jobInfo.Config.MetricRelabelConfigs, dropSet)
+		out = outcome.Out
+		series = outcome.Series
+		bodySize = outcome.BodySize
+		failOpen = outcome.FailOpen
+		reason = outcome.Reason
+		if outcome.Err != nil {
 			failOpen = true
 			out = data
 			bodySize = int64(len(data))
-			p.lastError.Store(ferr.Error())
-			p.log.Errorf("metric drop rewrite failed, fail-open: %v", ferr)
+			if reason == "" {
+				reason = scrape.FailOpenReasonParseError
+			}
 		}
 	}()
 	if failOpen {
-		p.failOpen.Add(1)
-		if p.LastError() == "" {
-			p.lastError.Store("protobuf or parse fail-open")
-		}
+		p.recordFailOpen(reason, job, hashStr, contentType, realURL, dropSet)
 	}
 
 	w.Header().Set("Content-Type", contentType)

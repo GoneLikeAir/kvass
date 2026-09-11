@@ -52,8 +52,26 @@ type RuntimeInfo struct {
 	DropSetGeneration string `json:"dropSetGeneration,omitempty"`
 	// DropSetFailOpen counts rewrite failures that forwarded the original body
 	DropSetFailOpen uint64 `json:"dropSetFailOpen"`
+	// DropSetFailOpenByReason is per-reason fail-open counts; sum equals DropSetFailOpen
+	DropSetFailOpenByReason map[string]uint64 `json:"dropSetFailOpenByReason,omitempty"`
+	// DropSetLoadError is the current drop-set load error, not covered by proxy history
+	DropSetLoadError string `json:"dropSetLoadError,omitempty"`
 	// DropSetLastError is the last drop-set load or rewrite error
 	DropSetLastError string `json:"dropSetLastError,omitempty"`
+	// DropSetLastFailure is the most recent fail-open event, not a current-fault flag
+	DropSetLastFailure *DropSetLastFailure `json:"dropSetLastFailure,omitempty"`
+}
+
+// DropSetLastFailure is a historical fail-open event snapshot.
+type DropSetLastFailure struct {
+	Reason          string    `json:"reason"`
+	Time            time.Time `json:"time"`
+	Job             string    `json:"job"`
+	TargetID        string    `json:"targetId"`
+	Address         string    `json:"address,omitempty"`
+	ContentType     string    `json:"contentType,omitempty"`
+	FilteringActive bool      `json:"filteringActive"`
+	Generation      string    `json:"generation,omitempty"`
 }
 
 // UpdateTargetsRequest contains all information about the targets updating request

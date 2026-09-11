@@ -1,0 +1,163 @@
+rule_files:
+  - rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: trigger then recover after events stop
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="parse_error",filtering_active="true",job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "0+1x10 10x20"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: parse_error
+              filtering_active: "true"
+              job: kvass-sidecar-fail-open
+              instance: "127.0.0.1:8080"
+            exp_annotations:
+              summary: "kvass metric-drop fail-open (parse_error)"
+              description: "Sidecar observed fail-open while filtering was active. Locate job/target from sidecar logs (targetId) and Prometheus /api/v1/targets around the event time. This does not estimate leaked series count, and up=1 only means the sidecar metrics path was scrapeable."
+      - eval_time: 20m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: KvassSidecarFailOpenMetricsAbsent
+        exp_alerts: []
+
+  - name: cumulative total greater than zero does not keep alerting
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="unexpected_response",filtering_active="true",job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "5x20"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+
+  - name: counter reset after pod restart does not false-fire
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="unsupported_format",filtering_active="true",job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "8 0x20"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "1x21"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+
+  - name: new pod starts at zero until new events
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="parse_error",filtering_active="true",job="kvass-sidecar-fail-open",instance="10.0.0.2:8080"}'
+        values: "0x12 0+1x8"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="10.0.0.2:8080"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: parse_error
+              filtering_active: "true"
+              job: kvass-sidecar-fail-open
+              instance: "10.0.0.2:8080"
+            exp_annotations:
+              summary: "kvass metric-drop fail-open (parse_error)"
+              description: "Sidecar observed fail-open while filtering was active. Locate job/target from sidecar logs (targetId) and Prometheus /api/v1/targets around the event time. This does not estimate leaked series count, and up=1 only means the sidecar metrics path was scrapeable."
+
+  - name: old pod recovers after events stop
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="parse_error",filtering_active="true",job="kvass-sidecar-fail-open",instance="10.0.0.3:8080"}'
+        values: "0+1x8 8x20"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="10.0.0.3:8080"}'
+        values: "1x28"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: parse_error
+              filtering_active: "true"
+              job: kvass-sidecar-fail-open
+              instance: "10.0.0.3:8080"
+            exp_annotations:
+              summary: "kvass metric-drop fail-open (parse_error)"
+              description: "Sidecar observed fail-open while filtering was active. Locate job/target from sidecar logs (targetId) and Prometheus /api/v1/targets around the event time. This does not estimate leaked series count, and up=1 only means the sidecar metrics path was scrapeable."
+      - eval_time: 20m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+
+  - name: scrape missing is availability not fail-open recovery
+    interval: 1m
+    input_series:
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KvassSidecarFailOpenMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: kvass-sidecar-fail-open
+              instance: "127.0.0.1:8080"
+            exp_annotations:
+              summary: "kvass fail-open metrics scrape is down"
+              description: "Dedicated scrape of /api/v1/shard/metrics/ is missing. Do not treat fail-open alerts becoming inactive as recovery while this alert fires."
+      - eval_time: 10m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []
+
+  - name: internal panic uses increase not lifetime total
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="internal_panic",filtering_active="true",job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "0+1x6 6x10"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "1x16"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: KvassMetricDropFailOpenInternalPanic
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              reason: internal_panic
+              filtering_active: "true"
+              job: kvass-sidecar-fail-open
+              instance: "127.0.0.1:8080"
+            exp_annotations:
+              summary: "kvass metric-drop filter internal panic"
+              description: "Internal panic during metric-drop filtering. Investigate the sidecar implementation. Logs omit panic payload."
+      - eval_time: 15m
+        alertname: KvassMetricDropFailOpenInternalPanic
+        exp_alerts: []
+
+  - name: filtering inactive is not alerted
+    interval: 1m
+    input_series:
+      - series: 'kvass_metric_drop_fail_open_total{reason="unsupported_format",filtering_active="false",job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "0+1x20"
+      - series: 'up{job="kvass-sidecar-fail-open",instance="127.0.0.1:8080"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KvassMetricDropFailOpen
+        exp_alerts: []

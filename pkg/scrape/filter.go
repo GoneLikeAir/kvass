@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/relabel"
@@ -15,25 +14,38 @@ import (
 
 // FilterAndStat rewrites scrape payload in one parse, dropping names in dropSet.
 func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string, rc []*relabel.Config, dropSet *metricdrop.Snapshot) (out []byte, series int64, bodySize int64, failOpen bool, err error) {
+	o := FilterAndStatOutcome(jobName, URL, raw, contentType, rc, dropSet)
+	return o.Out, o.Series, o.BodySize, o.FailOpen, o.Err
+}
+
+// FilterAndStatOutcome is the detailed entry used by sidecar proxy.
+// It shares one parse with FilterAndStat.
+func FilterAndStatOutcome(jobName string, URL *url.URL, raw []byte, contentType string, rc []*relabel.Config, dropSet *metricdrop.Snapshot) (o FilterOutcome) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			out = raw
-			series = 0
-			bodySize = int64(len(raw))
-			failOpen = true
-			err = nil
+			o = FilterOutcome{
+				Out:      raw,
+				Series:   0,
+				BodySize: int64(len(raw)),
+				FailOpen: true,
+				Reason:   FailOpenReasonInternalPanic,
+				Err:      nil,
+			}
 		}
 	}()
-	ct := strings.ToLower(contentType)
-	if strings.Contains(ct, "protobuf") || strings.Contains(ct, "delimited") {
-		return raw, 0, int64(len(raw)), true, nil
+	if isUnsupportedFormat(contentType) {
+		return FilterOutcome{Out: raw, BodySize: int64(len(raw)), FailOpen: true, Reason: FailOpenReasonUnsupportedFormat}
 	}
 	if dropSet == nil || !dropSet.Enabled || len(dropSet.Names) == 0 {
 		if URL == nil {
-			return raw, 0, int64(len(raw)), false, nil
+			return FilterOutcome{Out: raw, BodySize: int64(len(raw))}
 		}
 		total, _, serr := StatisticSeries(jobName, URL, raw, contentType, rc)
-		return raw, total, int64(len(raw)), false, serr
+		reason := ""
+		if serr != nil {
+			reason = classifyParseFailure(contentType)
+		}
+		return FilterOutcome{Out: raw, Series: total, BodySize: int64(len(raw)), Reason: reason, Err: serr}
 	}
 
 	p, _ := textparse.New(raw, contentType, false, nil)
@@ -51,6 +63,7 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 	emittedMeta := map[string]bool{}
 	kept := map[string]bool{}
 	outBuf := bytes.NewBuffer(make([]byte, 0, len(raw)))
+	var series int64
 	// Advance through the input once; rescanning from the beginning for each
 	// sample is quadratic and can select a different sample with identical labels.
 	lineOffset := 0
@@ -97,7 +110,13 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 			if nerr == io.EOF {
 				break
 			}
-			return raw, 0, int64(len(raw)), true, nerr
+			return FilterOutcome{
+				Out:      raw,
+				BodySize: int64(len(raw)),
+				FailOpen: true,
+				Reason:   classifyParseFailure(contentType),
+				Err:      nerr,
+			}
 		}
 		switch et {
 		case textparse.EntryHelp:
@@ -184,7 +203,7 @@ func FilterAndStat(jobName string, URL *url.URL, raw []byte, contentType string,
 		outBuf.WriteString("# EOF\n")
 	}
 	result := outBuf.Bytes()
-	return result, series, int64(len(result)), false, nil
+	return FilterOutcome{Out: result, Series: series, BodySize: int64(len(result))}
 }
 
 func originalSeriesLine(raw, series []byte) ([]byte, int) {

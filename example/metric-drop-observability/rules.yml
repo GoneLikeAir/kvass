@@ -1,0 +1,29 @@
+groups:
+  - name: kvass.metric_drop_fail_open
+    rules:
+      - alert: KvassMetricDropFailOpen
+        expr: increase(kvass_metric_drop_fail_open_total{filtering_active="true"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kvass metric-drop fail-open ({{ $labels.reason }})"
+          description: "Sidecar observed fail-open while filtering was active. Locate job/target from sidecar logs (targetId) and Prometheus /api/v1/targets around the event time. This does not estimate leaked series count, and up=1 only means the sidecar metrics path was scrapeable."
+
+      - alert: KvassMetricDropFailOpenInternalPanic
+        expr: increase(kvass_metric_drop_fail_open_total{reason="internal_panic",filtering_active="true"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kvass metric-drop filter internal panic"
+          description: "Internal panic during metric-drop filtering. Investigate the sidecar implementation. Logs omit panic payload."
+
+      - alert: KvassSidecarFailOpenMetricsAbsent
+        expr: up{job="kvass-sidecar-fail-open"} == 0 or absent(up{job="kvass-sidecar-fail-open"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kvass fail-open metrics scrape is down"
+          description: "Dedicated scrape of /api/v1/shard/metrics/ is missing. Do not treat fail-open alerts becoming inactive as recovery while this alert fires."
